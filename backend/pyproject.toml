@@ -1,0 +1,31 @@
+[project]
+name = "omnicient-backend"
+version = "0.1.0"
+description = "Evidence-backed OSINT crawling and identity correlation platform"
+requires-python = ">=3.12"
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+asyncio_mode = "auto"
+filterwarnings = [
+    "ignore::DeprecationWarning",
+    "ignore::PendingDeprecationWarning",
+]
+
+[tool.ruff]
+line-length = 100
+target-version = "py312"
+exclude = [".venv", "data"]
+
+[tool.ruff.lint]
+select = ["E", "F", "W", "I", "B", "UP", "C4", "SIM"]
+ignore = [
+    # Assigning an exception to a variable in a service is deliberate here.
+    "B008",  # FastAPI dependencies are declared as call defaults by design.
+]
+
+[tool.ruff.lint.per-file-ignores]
+"tests/*" = ["E501"]
+# SQLAlchemy resolves relationship targets from quoted forward references at
+# mapper-configuration time; unquoting them breaks cross-module models.
+"app/models/*" = ["UP037"]
