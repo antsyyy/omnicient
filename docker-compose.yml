@@ -1,0 +1,43 @@
+# Omnicient — evidence-backed OSINT crawling and identity correlation.
+#
+#   docker compose up --build
+#   interface: http://localhost:5173
+#   API docs:  http://localhost:8000/docs
+#
+# Demo mode is on by default, so the stack runs with no network access to any
+# external service.
+
+services:
+  backend:
+    build: ./backend
+    environment:
+      # Demo mode uses the built-in synthetic dataset. Set to false to query
+      # live public sources.
+      OMNICIENT_DEMO_MODE: "true"
+      OMNICIENT_DATABASE_URL: "sqlite:////data/omnicient.db"
+      OMNICIENT_MAX_DEPTH: "2"
+      OMNICIENT_MAX_PAGES: "50"
+      OMNICIENT_REQUEST_DELAY: "1.0"
+      OMNICIENT_CORS_ORIGINS: "http://localhost:5173,http://127.0.0.1:5173"
+    volumes:
+      - omnicient-data:/data
+    ports:
+      - "8000:8000"
+    healthcheck:
+      test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://127.0.0.1:8000/api/health')"]
+      interval: 10s
+      timeout: 3s
+      retries: 5
+
+  frontend:
+    build: ./frontend
+    environment:
+      OMNICIENT_API_URL: "http://backend:8000"
+    ports:
+      - "5173:5173"
+    depends_on:
+      backend:
+        condition: service_healthy
+
+volumes:
+  omnicient-data:
