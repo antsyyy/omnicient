@@ -70,10 +70,18 @@ export default function InvestigationHeader({
           {busy ? 'Crawling…' : 'Re-run discovery'}
         </button>
         <a
-          href={api.exportUrl(investigation.id)}
+          href={api.exportUrl(investigation.id, 'json')}
           className="rounded border border-line px-2 py-1 text-[12px] text-dim hover:border-line-bright hover:text-ink"
+          title="Full record: entities, relationships, evidence, snapshots, timeline"
         >
           Export JSON
+        </a>
+        <a
+          href={api.exportUrl(investigation.id, 'csv')}
+          className="rounded border border-line px-2 py-1 text-[12px] text-dim hover:border-line-bright hover:text-ink"
+          title="One row per relationship, with its evidence"
+        >
+          Export CSV
         </a>
         <Link
           to="/"

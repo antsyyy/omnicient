@@ -56,6 +56,7 @@ export interface Health {
   tagline: string
   version: string
   demo_mode: boolean
+  database: { engine: string; connected: boolean; error: string | null }
   demo_seed: { platform: string; identifier: string }
   sources: string[]
   demo_sources: string[]
@@ -88,13 +89,15 @@ export interface Investigation {
 }
 
 export interface CrawlEvent {
-  id: number
+  id: string
   investigation_id: string
   timestamp: string
   level: string
   event: string
   message: string
   data: Record<string, unknown> | null
+  /** Monotonic position in the timeline; orders events sharing a timestamp. */
+  sequence: number
 }
 
 export interface SourceIssue {
@@ -176,10 +179,25 @@ export interface Evidence {
   description: string
   source_url: string | null
   extracted_value: string | null
+  /** The comparison form that actually matched, when it differs from the raw value. */
+  normalized_value: string | null
   weight: number
   supports: boolean
   context: Record<string, unknown> | null
   collected_at: string
+  stance: EvidenceStance
+  /** Analyst-facing effect on the score, e.g. "+20". */
+  score_impact: string
+}
+
+export type EvidenceStance = 'SUPPORTING' | 'CONTRADICTORY' | 'NEUTRAL'
+
+export interface EvidenceBundle {
+  relationship_id: string
+  supporting: Evidence[]
+  contradicting: Evidence[]
+  neutral: Evidence[]
+  total: number
 }
 
 export interface Relationship {
@@ -193,6 +211,7 @@ export interface Relationship {
   confidence_level: ConfidenceLevel
   analyst_status: AnalystStatus
   analyst_note: string | null
+  reviewed_at: string | null
   summary: string | null
   evidence_ids: string[]
   evidence_count: number
@@ -271,6 +290,24 @@ export interface CrawlResult {
   issues: SourceIssue[]
 }
 
+/** Dashboard headline totals across every investigation (section 19). */
+export interface GlobalStats {
+  investigations: number
+  entities: number
+  relationships: number
+  /** Relationships an analyst reviewed and judged supportive. */
+  confirmed: number
+  rejected: number
+  by_platform: Record<string, number>
+}
+
+/** What the analyst typed, plus the options on the creation form. */
+export interface NewInvestigationInput {
+  identifier: string
+  demo: boolean
+  name?: string
+}
+
 /** Client-side graph filter state. */
 export interface FilterState {
   entityTypes: Set<EntityType>
@@ -278,4 +315,210 @@ export interface FilterState {
   confidenceLevels: Set<ConfidenceLevel>
   hideRejected: boolean
   minScore: number
+}
+
+// ---------------------------------------------------------------------------
+// Identity Intelligence Profile
+// ---------------------------------------------------------------------------
+
+/** One publicly observed attribute, and the entities that published it. */
+export interface ObservedValue {
+  value: string
+  label: string | null
+  entity_ids: string[]
+  platforms: string[]
+  source_urls: string[]
+  observation_count: number
+  /** True when more than one entity published it independently. */
+  corroborated: boolean
+}
+
+export interface PrimaryIdentifier {
+  value: string
+  type: string
+  platform: string | null
+  entity_id: string | null
+}
+
+export interface ObservedPlatform {
+  platform: string
+  platform_name: string
+  entity_ids: string[]
+  resolved: number
+  total: number
+}
+
+export interface ProfileStatistics {
+  entities: number
+  accounts: number
+  websites: number
+  relationships: number
+  potential_relationships: number
+  high_confidence: number
+  medium_confidence: number
+  low_confidence: number
+  contradictions: number
+  evidence: number
+  confirmed: number
+  rejected: number
+  unreviewed: number
+  by_entity_type: Record<string, number>
+}
+
+export interface EvidenceSummary {
+  by_type: Record<string, number>
+  supporting: number
+  contradicting: number
+  neutral: number
+  unexplained_relationships: number
+  traceable: boolean
+}
+
+export interface IdentityProfile {
+  investigation_id: string
+  investigation_name: string
+  demo: boolean
+  disclaimer: string
+  primary_identifier: PrimaryIdentifier
+  potential_aliases: Alias[]
+  platforms: ObservedPlatform[]
+  websites: ObservedValue[]
+  emails: ObservedValue[]
+  organizations: ObservedValue[]
+  locations: ObservedValue[]
+  display_names: ObservedValue[]
+  first_observed: string | null
+  last_observed: string | null
+  snapshot_count: number
+  statistics: ProfileStatistics
+  evidence_summary: EvidenceSummary
+  contradictions: string[]
+  has_aliases: boolean
+}
+
+// ---------------------------------------------------------------------------
+// Aliases
+// ---------------------------------------------------------------------------
+
+export type AliasStrength = 'STRONG' | 'MODERATE' | 'WEAK' | 'NONE'
+
+export interface AliasSignal {
+  kind: string
+  label: string
+  detail: string
+  weight: number
+}
+
+export interface Alias {
+  relationship_id: string | null
+  source_entity_id: string | null
+  target_entity_id: string | null
+  source_entity: EntitySummary | null
+  target_entity: EntitySummary | null
+  source_identifier: string
+  target_identifier: string
+  source_platform: string | null
+  target_platform: string | null
+  similarity: number
+  strength: AliasStrength
+  transformations: string[]
+  signals: AliasSignal[]
+  score: number
+  confidence: ConfidenceLevel
+  analyst_status: AnalystStatus
+  supporting_evidence: Evidence[]
+  contradicting_evidence: Evidence[]
+  /** Always "Potential Alias" — never a confirmed one. */
+  label: string
+  contradiction_count: number
+}
+
+export interface AliasList {
+  investigation_id: string
+  primary_identifier: string | null
+  aliases: Alias[]
+  total: number
+}
+
+// ---------------------------------------------------------------------------
+// Relationship paths
+// ---------------------------------------------------------------------------
+
+export interface PathStep {
+  relationship_id: string
+  relationship_type: RelationshipType
+  relationship_label: string
+  confidence_score: number
+  confidence_level: ConfidenceLevel
+  analyst_status: AnalystStatus
+  evidence_count: number
+  reversed: boolean
+  entity: EntitySummary
+}
+
+export interface RelationshipPath {
+  rank: number
+  length: number
+  start: EntitySummary
+  steps: PathStep[]
+  strength_score: number
+  strength: string
+  total_evidence: number
+  contradictions: number
+  confirmed_steps: number
+  rejected_steps: number
+  node_ids: string[]
+  relationship_ids: string[]
+  has_contradictions: boolean
+  relationship_types: string[]
+  summary: string
+}
+
+export interface PathResponse {
+  investigation_id: string
+  source_entity_id: string
+  target_entity_id: string
+  source_entity: EntitySummary | null
+  target_entity: EntitySummary | null
+  max_depth: number
+  max_paths: number
+  paths: RelationshipPath[]
+  found: number
+  message: string
+}
+
+/** What the graph should highlight, when a path is selected. */
+export interface PathHighlight {
+  nodeIds: Set<string>
+  edgeIds: Set<string>
+}
+
+// ---------------------------------------------------------------------------
+// Investigation leads
+// ---------------------------------------------------------------------------
+
+export type LeadPriority = 'HIGH' | 'MEDIUM' | 'LOW'
+
+export interface Lead {
+  id: string
+  type: string
+  priority: LeadPriority
+  title: string
+  description: string
+  suggested_action: string
+  related_entity_ids: string[]
+  related_entities: EntitySummary[]
+  related_relationship_ids: string[]
+  supporting_evidence_ids: string[]
+  score: number
+  pivot_value: string | null
+  label: string
+  entity_count: number
+}
+
+export interface LeadList {
+  investigation_id: string
+  leads: Lead[]
+  total: number
+  by_priority: Record<string, number>
 }

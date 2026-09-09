@@ -7,10 +7,16 @@
  */
 
 import type {
+  AliasList,
+  CrawlEvent,
   CrawlResult,
   EntityDetail,
-  Evidence,
+  EvidenceBundle,
+  GlobalStats,
   Health,
+  IdentityProfile,
+  LeadList,
+  PathResponse,
   Investigation,
   InvestigationDetail,
   InvestigationGraph,
@@ -64,8 +70,13 @@ async function request<T>(path: string, init?: RequestInit): Promise<T> {
 }
 
 export interface CreateInvestigationInput {
+  /**
+   * The only required field: a username, email, profile URL or domain.
+   * The backend detects which it is - the client never picks a platform.
+   */
   identifier: string
-  platform: string
+  /** Optional override; normally omitted so every source is searched. */
+  platform?: string
   name?: string
   demo?: boolean
   max_depth?: number
@@ -75,6 +86,8 @@ export interface CreateInvestigationInput {
 
 export const api = {
   health: () => request<Health>('/health'),
+
+  stats: () => request<GlobalStats>('/stats'),
 
   listInvestigations: () => request<Investigation[]>('/investigations'),
 
@@ -96,6 +109,31 @@ export const api = {
       body: JSON.stringify(options),
     }),
 
+  getActivity: (id: string) =>
+    request<CrawlEvent[]>(`/investigations/${id}/activity`),
+
+  getProfile: (id: string) =>
+    request<IdentityProfile>(`/investigations/${id}/profile`),
+
+  getAliases: (id: string) => request<AliasList>(`/investigations/${id}/aliases`),
+
+  getLeads: (id: string) => request<LeadList>(`/investigations/${id}/leads`),
+
+  findPaths: (
+    id: string,
+    sourceEntityId: string,
+    targetEntityId: string,
+    options: { max_depth?: number; max_paths?: number } = {},
+  ) => {
+    const params = new URLSearchParams({
+      source_entity_id: sourceEntityId,
+      target_entity_id: targetEntityId,
+    })
+    if (options.max_depth) params.set('max_depth', String(options.max_depth))
+    if (options.max_paths) params.set('max_paths', String(options.max_paths))
+    return request<PathResponse>(`/investigations/${id}/paths?${params}`)
+  },
+
   getGraph: (id: string) =>
     request<InvestigationGraph>(`/investigations/${id}/graph`),
 
@@ -111,9 +149,7 @@ export const api = {
     request<RelationshipDetail>(`/relationships/${id}`),
 
   getRelationshipEvidence: (id: string) =>
-    request<{ relationship_id: string; supporting: Evidence[]; contradicting: Evidence[] }>(
-      `/relationships/${id}/evidence`,
-    ),
+    request<EvidenceBundle>(`/relationships/${id}/evidence`),
 
   confirmRelationship: (id: string, note?: string) =>
     request<RelationshipDetail>(`/relationships/${id}/confirm`, {
@@ -130,5 +166,7 @@ export const api = {
   resetRelationship: (id: string) =>
     request<RelationshipDetail>(`/relationships/${id}/reset`, { method: 'POST' }),
 
-  exportUrl: (id: string) => `${BASE}/investigations/${id}/export?download=true`,
+  /** Download link for an investigation export (section 29). */
+  exportUrl: (id: string, format: 'json' | 'csv' = 'json') =>
+    `${BASE}/investigations/${id}/export?download=true&format=${format}`,
 }

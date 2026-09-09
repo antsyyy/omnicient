@@ -1,6 +1,6 @@
 import type { FilterState, InvestigationDetail, InvestigationGraph } from '../types'
+import ActivityLog from './ActivityLog'
 import Filters from './Filters'
-import { formatTime } from '../lib/display'
 
 interface Props {
   investigation: InvestigationDetail
@@ -31,10 +31,12 @@ export default function Sidebar({
   onFiltersChange,
 }: Props) {
   const stats = graph?.stats
-  const events = investigation.events.slice(-40).reverse()
+  const running =
+    investigation.status === 'CRAWLING' || investigation.status === 'ANALYZING'
 
   return (
-    <aside className="flex w-[280px] shrink-0 flex-col overflow-y-auto border-r border-line bg-panel">
+    <aside className="flex w-[280px] shrink-0 flex-col overflow-hidden border-r border-line bg-panel">
+      <div className="flex max-h-[62%] flex-none flex-col overflow-y-auto">
       <section className="border-b border-line px-3 py-3">
         <div className="panel-title">Seed</div>
         <div className="mt-0.5 font-mono text-[13px] text-ink">
@@ -96,33 +98,11 @@ export default function Sidebar({
           onChange={onFiltersChange}
         />
       </section>
+      </div>
 
-      <section className="px-3 py-3">
-        <div className="panel-title mb-1">Activity</div>
-        <ul className="space-y-1">
-          {events.map((event) => (
-            <li key={event.id} className="flex gap-2 text-[11px] leading-snug">
-              <span className="shrink-0 font-mono text-faint">
-                {formatTime(event.timestamp)}
-              </span>
-              <span
-                className={
-                  event.level === 'WARNING'
-                    ? 'text-band-medium'
-                    : event.level === 'ERROR'
-                      ? 'text-rejected'
-                      : 'text-dim'
-                }
-              >
-                {event.message}
-              </span>
-            </li>
-          ))}
-          {events.length === 0 && (
-            <li className="text-[11px] text-faint">No activity recorded yet.</li>
-          )}
-        </ul>
-      </section>
+      <div className="flex min-h-0 flex-1 flex-col border-t border-line">
+        <ActivityLog events={investigation.events} live={running} />
+      </div>
     </aside>
   )
 }

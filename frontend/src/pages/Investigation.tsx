@@ -6,12 +6,16 @@ import EntityPanel from '../components/EntityPanel'
 import InvestigationGraph from '../components/InvestigationGraph'
 import InvestigationHeader from '../components/InvestigationHeader'
 import RelationshipPanel from '../components/RelationshipPanel'
+import IdentityProfilePanel from '../components/IdentityProfilePanel'
+import LeadsPanel from '../components/LeadsPanel'
+import PathExplorer from '../components/PathExplorer'
 import Sidebar from '../components/Sidebar'
 import type {
   ConfidenceLevel,
   FilterState,
   InvestigationDetail,
   InvestigationGraph as GraphPayload,
+  PathHighlight,
 } from '../types'
 import { CONFIDENCE_ORDER, ENTITY_TYPES, RELATIONSHIP_TYPES } from '../lib/display'
 
@@ -29,6 +33,8 @@ const RUNNING = ['CREATED', 'CRAWLING', 'ANALYZING']
  * The investigation workspace: graph in the centre, investigation context on
  * the left, the inspector on the right.
  */
+type InspectorTab = 'profile' | 'leads' | 'paths'
+
 export default function Investigation() {
   const { id = '' } = useParams()
   const [investigation, setInvestigation] = useState<InvestigationDetail | null>(null)
@@ -40,12 +46,20 @@ export default function Investigation() {
   const [focusNodeId, setFocusNodeId] = useState<string | null>(null)
   const [layoutKey, setLayoutKey] = useState(0)
   const [busy, setBusy] = useState(false)
+  const [tab, setTab] = useState<InspectorTab>('profile')
+  const [highlight, setHighlight] = useState<PathHighlight | null>(null)
+  // Bumped whenever the graph changes, so the analysis panels refetch rather
+  // than showing a profile computed from a stale graph.
+  const [revision, setRevision] = useState(0)
 
   const load = useCallback(async () => {
     const detail = await api.getInvestigation(id)
     setInvestigation(detail)
     if (!RUNNING.includes(detail.status)) {
       setGraph(await api.getGraph(id))
+      // The analysis panels read the graph too; bumping this makes them
+      // refetch, so a confirm or reject is reflected everywhere at once.
+      setRevision((value) => value + 1)
     }
     return detail
   }, [id])
@@ -92,7 +106,14 @@ export default function Investigation() {
     if (edgeId) setSelectedNodeId(null)
   }, [])
 
-  const inspector = useMemo(() => {
+  /** Analysis tabs live beside the graph; selection opens the detail tabs. */
+  const analysisTabs: { id: InspectorTab; label: string }[] = [
+    { id: 'profile', label: 'Profile' },
+    { id: 'leads', label: 'Leads' },
+    { id: 'paths', label: 'Paths' },
+  ]
+
+  const detail = useMemo(() => {
     if (selectedEdgeId) {
       return (
         <RelationshipPanel
@@ -191,6 +212,7 @@ export default function Investigation() {
                 selectedEdgeId={selectedEdgeId}
                 focusNodeId={focusNodeId}
                 layoutKey={layoutKey}
+                highlight={highlight}
                 onSelectNode={selectNode}
                 onSelectEdge={selectEdge}
               />
@@ -221,11 +243,78 @@ export default function Investigation() {
           )}
         </main>
 
-        {inspector && (
-          <section className="w-[360px] shrink-0 overflow-hidden border-l border-line bg-panel">
-            {inspector}
-          </section>
-        )}
+        <section className="flex w-[380px] shrink-0 flex-col overflow-hidden border-l border-line bg-panel">
+          <nav className="flex shrink-0 border-b border-line">
+            {analysisTabs.map((entry) => (
+              <button
+                key={entry.id}
+                onClick={() => {
+                  setTab(entry.id)
+                  selectNode(null)
+                  selectEdge(null)
+                }}
+                className="flex-1 px-2 py-1.5 font-mono text-[11px] tracking-wide"
+                style={{
+                  color:
+                    tab === entry.id && !detail
+                      ? 'var(--color-accent)'
+                      : 'var(--color-dim)',
+                  borderBottom:
+                    tab === entry.id && !detail
+                      ? '2px solid var(--color-accent)'
+                      : '2px solid transparent',
+                }}
+              >
+                {entry.label}
+              </button>
+            ))}
+            {detail && (
+              <button
+                onClick={() => {
+                  selectNode(null)
+                  selectEdge(null)
+                }}
+                className="px-2 py-1.5 font-mono text-[11px] text-accent"
+                style={{ borderBottom: '2px solid var(--color-accent)' }}
+                title="Back to the analysis panels"
+              >
+                Detail ✕
+              </button>
+            )}
+          </nav>
+
+          {detail ?? (
+            <>
+              {tab === 'profile' && (
+                <IdentityProfilePanel
+                  investigationId={investigation.id}
+                  revision={revision}
+                  onSelectEntity={selectNode}
+                  onSelectRelationship={selectEdge}
+                />
+              )}
+              {tab === 'leads' && (
+                <LeadsPanel
+                  investigationId={investigation.id}
+                  revision={revision}
+                  onSelectEntity={selectNode}
+                  onSelectRelationship={selectEdge}
+                  onHighlight={setHighlight}
+                />
+              )}
+              {tab === 'paths' && (
+                <PathExplorer
+                  investigationId={investigation.id}
+                  nodes={graph?.nodes ?? []}
+                  selectedNodeId={selectedNodeId}
+                  onSelectEntity={selectNode}
+                  onSelectRelationship={selectEdge}
+                  onHighlight={setHighlight}
+                />
+              )}
+            </>
+          )}
+        </section>
       </div>
     </div>
   )
