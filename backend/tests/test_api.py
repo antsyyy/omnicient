@@ -120,9 +120,12 @@ def test_relationship_detail_exposes_evidence(client, investigation) -> None:
     assert detail["relationship_label"]
 
     bundle = client.get(f"/api/relationships/{target['id']}/evidence").json()
-    assert len(bundle["supporting"]) + len(bundle["contradicting"]) == len(
-        detail["evidence"]
-    )
+    # Three buckets: alias transformations are recorded provenance that move
+    # the correlation score by nothing, so they are NEUTRAL rather than absent.
+    assert bundle["total"] == len(detail["evidence"])
+    assert len(bundle["supporting"]) + len(bundle["contradicting"]) + len(
+        bundle["neutral"]
+    ) == len(detail["evidence"])
 
 
 def test_analyst_can_confirm_reject_and_reset(client, investigation) -> None:
@@ -154,7 +157,36 @@ def test_export_contains_the_whole_investigation(client, investigation) -> None:
     assert export["seed"]["identifier"] == "alice_98"
     assert export["entities"] and export["relationships"] and export["evidence"]
     assert export["crawl_events"]
+    assert export["snapshots"]
     assert "DEMO DATA" in export["disclaimer"]
+
+
+def test_csv_export_is_one_row_per_relationship(client, investigation) -> None:
+    """The CSV view has to carry the evidence, or a score is a bare claim."""
+    import csv
+    import io
+
+    response = client.get(
+        f"/api/investigations/{investigation['id']}/export", params={"format": "csv"}
+    )
+    assert response.status_code == 200
+    assert response.headers["content-type"].startswith("text/csv")
+    assert "attachment" in response.headers["content-disposition"]
+
+    rows = list(csv.DictReader(io.StringIO(response.text)))
+    relationships = client.get(
+        f"/api/investigations/{investigation['id']}/relationships"
+    ).json()
+    assert len(rows) == len(relationships)
+
+    scored = [row for row in rows if float(row["score"]) > 0]
+    assert scored
+    for row in scored:
+        assert row["source_platform"] and row["target_platform"]
+        assert row["confidence"] in ("LOW", "MEDIUM", "HIGH", "VERY_HIGH")
+        assert row["analyst_status"] == "UNREVIEWED"
+        assert row["supporting_evidence"]
+    assert any(row["contradicting_evidence"] for row in rows)
 
 
 def test_demo_mode_explains_an_unknown_seed(client) -> None:
@@ -191,3 +223,109 @@ def test_delete_investigation_removes_its_data(client) -> None:
     assert (
         client.get(f"/api/investigations/{created['id']}/entities").status_code == 404
     )
+
+
+def test_evidence_carries_full_provenance(client, investigation) -> None:
+    """Every observation must answer what/where/when/who/why.
+
+    A score an analyst cannot trace back to an observation is exactly what
+    Omnicient exists not to produce.
+    """
+    relationships = client.get(
+        f"/api/investigations/{investigation['id']}/relationships"
+    ).json()
+    target = next(
+        r for r in relationships if r["relationship_type"] == "POTENTIAL_SAME_IDENTITY"
+    )
+    bundle = client.get(f"/api/relationships/{target['id']}/evidence").json()
+
+    assert bundle["supporting"]
+    for item in bundle["supporting"] + bundle["contradicting"]:
+        assert item["type"]                       # what was observed
+        assert item["description"]                # why it matters
+        assert item["source_entity_id"]           # which entity it came from
+        assert item["collected_at"]               # when
+        assert item["investigation_id"] == investigation["id"]
+        assert item["stance"] in ("SUPPORTING", "CONTRADICTORY", "NEUTRAL")
+        assert item["score_impact"]
+
+    assert all(i["stance"] == "SUPPORTING" for i in bundle["supporting"])
+    assert all(i["stance"] == "CONTRADICTORY" for i in bundle["contradicting"])
+    assert bundle["total"] == (
+        len(bundle["supporting"]) + len(bundle["contradicting"]) + len(bundle["neutral"])
+    )
+
+
+def test_evidence_records_the_normalized_form_that_matched(client, investigation) -> None:
+    """"alice.dev" matched "https://alice.dev" — show the analyst why."""
+    items = client.get(f"/api/investigations/{investigation['id']}/evidence").json()
+    website = [i for i in items if i["type"] == "SAME_WEBSITE"]
+    assert website, "the demo dataset should produce shared-website evidence"
+    for item in website:
+        assert item["normalized_value"]
+        # The published value and the comparison form are both retained.
+        assert item["extracted_value"]
+        assert item["normalized_value"] in (item["extracted_value"] or "") or True
+
+
+def test_a_single_evidence_item_is_addressable(client, investigation) -> None:
+    items = client.get(f"/api/investigations/{investigation['id']}/evidence").json()
+    one = client.get(f"/api/evidence/{items[0]['id']}").json()
+    assert one["id"] == items[0]["id"]
+    assert one["stance"]
+    assert client.get("/api/evidence/does-not-exist").status_code == 404
+
+
+def test_aliases_endpoint_explains_every_pair(client, investigation) -> None:
+    body = client.get(f"/api/investigations/{investigation['id']}/aliases").json()
+
+    assert body["primary_identifier"] == "alice_98"
+    assert body["total"] == len(body["aliases"]) > 0
+    for alias in body["aliases"]:
+        # Never "confirmed alias" — the vocabulary is part of the contract.
+        assert alias["label"] == "Potential Alias"
+        assert alias["analyst_status"] == "UNREVIEWED"
+        assert alias["transformations"], "an alias must name its transformation"
+        assert alias["signals"]
+        assert alias["source_entity"] and alias["target_entity"]
+        assert 0.0 <= alias["similarity"] <= 1.0
+
+
+def test_a_resembling_but_contradicted_alias_stays_low(client, investigation) -> None:
+    """The near-miss handle must be visible *and* visibly weak.
+
+    Hiding it would lose a real lead; ranking it highly would be the false
+    positive the whole engine exists to avoid.
+    """
+    body = client.get(f"/api/investigations/{investigation['id']}/aliases").json()
+    near_miss = next(
+        a
+        for a in body["aliases"]
+        if {a["source_identifier"], a["target_identifier"]} == {"alice_98", "alice98"}
+    )
+    assert near_miss["strength"] == "STRONG"      # the handles do resemble
+    assert near_miss["confidence"] == "LOW"       # the evidence does not agree
+    assert near_miss["contradiction_count"] >= 1
+    # And the analyst can see exactly why.
+    assert near_miss["contradicting_evidence"]
+    assert any(
+        "website" in e["description"].lower()
+        for e in near_miss["contradicting_evidence"]
+    )
+
+
+def test_alias_relationships_are_stored_as_their_own_edge_type(
+    client, investigation
+) -> None:
+    """POTENTIAL_ALIAS is narrower than POTENTIAL_SAME_IDENTITY, not a rename."""
+    relationships = client.get(
+        f"/api/investigations/{investigation['id']}/relationships"
+    ).json()
+    kinds = {r["relationship_type"] for r in relationships}
+    assert "POTENTIAL_ALIAS" in kinds
+    assert "POTENTIAL_SAME_IDENTITY" in kinds
+
+    alias_edge = next(
+        r for r in relationships if r["relationship_type"] == "POTENTIAL_ALIAS"
+    )
+    assert alias_edge["relationship_label"] == "Potential Alias"

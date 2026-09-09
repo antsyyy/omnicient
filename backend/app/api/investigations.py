@@ -2,16 +2,16 @@
 
 from __future__ import annotations
 
-from fastapi import APIRouter, BackgroundTasks, Depends, HTTPException, Query, status
-from fastapi.responses import JSONResponse
-from sqlalchemy import func, select
-from sqlalchemy.orm import Session
+from enum import StrEnum
 
-from ..database import get_db, session_scope
-from ..models.entity import Entity
+from fastapi import APIRouter, BackgroundTasks, Depends, HTTPException, Query, status
+from fastapi.responses import JSONResponse, PlainTextResponse
+
+from ..database import get_repository, repository_scope
 from ..models.enums import EntityType
-from ..models.investigation import CrawlEvent, Investigation
-from ..models.relationship import Relationship
+from ..models.investigation import Investigation
+from ..repository import Neo4jRepository
+from ..schemas.alias import AliasList
 from ..schemas.entity import EntityRead
 from ..schemas.graph import GraphResponse
 from ..schemas.investigation import (
@@ -23,9 +23,16 @@ from ..schemas.investigation import (
     InvestigationExport,
     InvestigationRead,
 )
+from ..schemas.lead import LeadList
+from ..schemas.path import PathResponse
+from ..schemas.profile import IdentityProfile
 from ..schemas.relationship import RelationshipRead
+from ..services.alias_service import AliasService
 from ..services.graph import GraphService
+from ..services.identity_profile import IdentityProfileService
 from ..services.investigation import InvestigationService
+from ..services.leads import LeadService
+from ..services.paths import PathNotFoundError, PathService
 from ..utils.logging import get_logger
 from ..utils.normalization import NormalizationError
 
@@ -34,20 +41,27 @@ logger = get_logger(__name__)
 router = APIRouter(prefix="/investigations", tags=["investigations"])
 
 
-def _get_investigation(db: Session, investigation_id: str) -> Investigation:
-    investigation = db.get(Investigation, investigation_id)
+class ExportFormat(StrEnum):
+    """Supported export formats (section 29)."""
+
+    JSON = "json"
+    CSV = "csv"
+
+
+def _get_investigation(repo: Neo4jRepository, investigation_id: str) -> Investigation:
+    investigation = repo.get_investigation(investigation_id)
     if investigation is None:
         raise HTTPException(status_code=404, detail="Investigation not found")
     return investigation
 
 
 async def _run_in_background(investigation_id: str) -> None:
-    """Run discovery for an investigation in its own database session."""
-    with session_scope() as db:
-        investigation = db.get(Investigation, investigation_id)
+    """Run discovery for an investigation on its own database session."""
+    with repository_scope() as repo:
+        investigation = repo.get_investigation(investigation_id)
         if investigation is None:  # pragma: no cover - deleted mid-flight
             return
-        await InvestigationService(db).run(investigation)
+        await InvestigationService(repo).run(investigation)
 
 
 @router.post(
@@ -59,14 +73,14 @@ async def _run_in_background(investigation_id: str) -> None:
 def create_investigation(
     payload: InvestigationCreate,
     background: BackgroundTasks,
-    db: Session = Depends(get_db),
+    repo: Neo4jRepository = Depends(get_repository),
 ) -> InvestigationRead:
     """Create an investigation and, by default, start discovery in the background.
 
     The response returns immediately so the client can show crawl progress;
     poll ``GET /api/investigations/{id}`` until the status leaves ``CRAWLING``.
     """
-    service = InvestigationService(db)
+    service = InvestigationService(repo)
     try:
         investigation = service.create(payload)
     except NormalizationError as exc:
@@ -79,21 +93,16 @@ def create_investigation(
 
 @router.get("", response_model=list[InvestigationRead], summary="List investigations")
 def list_investigations(
-    db: Session = Depends(get_db),
+    repo: Neo4jRepository = Depends(get_repository),
     limit: int = Query(default=50, ge=1, le=200),
     offset: int = Query(default=0, ge=0),
 ) -> list[InvestigationRead]:
     """Most recent investigations first, with their headline counts."""
-    investigations = list(
-        db.scalars(
-            select(Investigation)
-            .order_by(Investigation.created_at.desc())
-            .limit(limit)
-            .offset(offset)
-        )
-    )
-    service = InvestigationService(db)
-    return [service.to_read(investigation) for investigation in investigations]
+    service = InvestigationService(repo)
+    return [
+        service.to_read(investigation)
+        for investigation in repo.list_investigations(limit=limit, offset=offset)
+    ]
 
 
 @router.get(
@@ -102,18 +111,12 @@ def list_investigations(
     summary="Read one investigation",
 )
 def read_investigation(
-    investigation_id: str, db: Session = Depends(get_db)
+    investigation_id: str, repo: Neo4jRepository = Depends(get_repository)
 ) -> InvestigationDetail:
     """An investigation with its activity timeline and any source failures."""
-    investigation = _get_investigation(db, investigation_id)
-    service = InvestigationService(db)
-    events = list(
-        db.scalars(
-            select(CrawlEvent)
-            .where(CrawlEvent.investigation_id == investigation_id)
-            .order_by(CrawlEvent.timestamp, CrawlEvent.id)
-        )
-    )
+    investigation = _get_investigation(repo, investigation_id)
+    service = InvestigationService(repo)
+    events = repo.list_events(investigation_id)
     seed = service.seed_entity(investigation_id)
     base = service.to_read(investigation)
     return InvestigationDetail(
@@ -129,11 +132,12 @@ def read_investigation(
     status_code=status.HTTP_204_NO_CONTENT,
     summary="Delete an investigation",
 )
-def delete_investigation(investigation_id: str, db: Session = Depends(get_db)) -> None:
+def delete_investigation(
+    investigation_id: str, repo: Neo4jRepository = Depends(get_repository)
+) -> None:
     """Delete an investigation and everything discovered for it."""
-    investigation = _get_investigation(db, investigation_id)
-    db.delete(investigation)
-    db.commit()
+    _get_investigation(repo, investigation_id)
+    repo.delete_investigation(investigation_id)
 
 
 @router.post(
@@ -144,12 +148,12 @@ def delete_investigation(investigation_id: str, db: Session = Depends(get_db)) -
 async def crawl_investigation(
     investigation_id: str,
     payload: CrawlRequest | None = None,
-    db: Session = Depends(get_db),
+    repo: Neo4jRepository = Depends(get_repository),
 ) -> CrawlResult:
     """Run (or re-run) discovery synchronously and return what it produced."""
-    investigation = _get_investigation(db, investigation_id)
+    investigation = _get_investigation(repo, investigation_id)
     options = payload or CrawlRequest()
-    service = InvestigationService(db)
+    service = InvestigationService(repo)
     summary = await service.run(
         investigation,
         max_depth=options.max_depth,
@@ -173,15 +177,14 @@ async def crawl_investigation(
 )
 def list_entities(
     investigation_id: str,
-    db: Session = Depends(get_db),
+    repo: Neo4jRepository = Depends(get_repository),
     entity_type: EntityType | None = Query(default=None, alias="type"),
 ) -> list[EntityRead]:
     """Every entity discovered for an investigation, shallowest first."""
-    _get_investigation(db, investigation_id)
-    query = select(Entity).where(Entity.investigation_id == investigation_id)
-    if entity_type is not None:
-        query = query.where(Entity.type == str(entity_type))
-    entities = db.scalars(query.order_by(Entity.depth, Entity.created_at))
+    _get_investigation(repo, investigation_id)
+    entities = repo.list_entities(
+        investigation_id, str(entity_type) if entity_type else None
+    )
     return [EntityRead.model_validate(entity) for entity in entities]
 
 
@@ -192,18 +195,13 @@ def list_entities(
 )
 def list_relationships(
     investigation_id: str,
-    db: Session = Depends(get_db),
+    repo: Neo4jRepository = Depends(get_repository),
     min_score: float = Query(default=0.0, ge=0, le=100),
 ) -> list[RelationshipRead]:
     """Relationships for an investigation, strongest first."""
-    _get_investigation(db, investigation_id)
-    relationships = db.scalars(
-        select(Relationship)
-        .where(
-            Relationship.investigation_id == investigation_id,
-            Relationship.confidence_score >= min_score,
-        )
-        .order_by(Relationship.confidence_score.desc())
+    _get_investigation(repo, investigation_id)
+    relationships = repo.attach_evidence(
+        repo.list_relationships(investigation_id, min_score=min_score)
     )
     return [
         RelationshipRead.model_validate(relationship) for relationship in relationships
@@ -211,14 +209,103 @@ def list_relationships(
 
 
 @router.get(
+    "/{investigation_id}/profile",
+    response_model=IdentityProfile,
+    summary="Identity Intelligence Profile",
+)
+def read_profile(
+    investigation_id: str, repo: Neo4jRepository = Depends(get_repository)
+) -> IdentityProfile:
+    """An evidence-backed summary of what this investigation observed.
+
+    Computed from the graph on request rather than stored, so it cannot drift
+    from the entities and evidence behind it. Every aggregated value names the
+    entities that published it; nothing here asserts an identity.
+    """
+    investigation = _get_investigation(repo, investigation_id)
+    return IdentityProfileService(repo).build(investigation)
+
+
+@router.get(
+    "/{investigation_id}/aliases",
+    response_model=AliasList,
+    summary="Potential aliases discovered in this investigation",
+)
+def list_aliases(
+    investigation_id: str, repo: Neo4jRepository = Depends(get_repository)
+) -> AliasList:
+    """Handle variants proposed by the alias detector, strongest first.
+
+    Every entry is a *potential* alias: a claim about the handles, backed by a
+    named transformation and whatever contextual evidence corroborates it.
+    """
+    investigation = _get_investigation(repo, investigation_id)
+    return AliasService(repo).list_aliases(investigation)
+
+
+@router.get(
+    "/{investigation_id}/leads",
+    response_model=LeadList,
+    summary="Suggested investigation leads",
+)
+def list_leads(
+    investigation_id: str,
+    repo: Neo4jRepository = Depends(get_repository),
+    limit: int = Query(default=50, ge=1, le=200),
+) -> LeadList:
+    """What is worth looking at next, derived from evidence already collected.
+
+    Leads are suggestions for an analyst, not investigative conclusions, and
+    nothing here starts a new external search - the analyst stays in control.
+    """
+    investigation = _get_investigation(repo, investigation_id)
+    return LeadService(repo).generate(investigation, limit=limit)
+
+
+@router.get(
+    "/{investigation_id}/paths",
+    response_model=PathResponse,
+    summary="How are two entities connected?",
+)
+def find_paths(
+    investigation_id: str,
+    source_entity_id: str = Query(min_length=1, max_length=64),
+    target_entity_id: str = Query(min_length=1, max_length=64),
+    repo: Neo4jRepository = Depends(get_repository),
+    max_depth: int | None = Query(default=None, ge=1, le=8),
+    max_paths: int | None = Query(default=None, ge=1, le=25),
+) -> PathResponse:
+    """Ranked routes between two entities of this investigation.
+
+    Both entities must belong to the investigation in the path - the traversal
+    is scoped to it, so one investigation cannot be used to walk into another.
+    Depth and result count are bounded; there is no way to ask for an
+    unlimited search and no way to supply Cypher.
+    """
+    investigation = _get_investigation(repo, investigation_id)
+    try:
+        return PathService(repo).find(
+            investigation,
+            source_entity_id,
+            target_entity_id,
+            max_depth=max_depth,
+            max_paths=max_paths,
+        )
+    except PathNotFoundError as exc:
+        raise HTTPException(status_code=422, detail=str(exc)) from exc
+
+
+@router.get(
     "/{investigation_id}/graph",
     response_model=GraphResponse,
     summary="Investigation graph",
 )
-def read_graph(investigation_id: str, db: Session = Depends(get_db)) -> GraphResponse:
+def read_graph(
+    investigation_id: str, repo: Neo4jRepository = Depends(get_repository)
+) -> GraphResponse:
     """Nodes, edges, layout hints and statistics for the investigation graph."""
-    investigation = _get_investigation(db, investigation_id)
-    return GraphService(db).build(investigation)
+    investigation = _get_investigation(repo, investigation_id)
+    return GraphService(repo).build(investigation)
 
 
 @router.get(
@@ -228,39 +315,79 @@ def read_graph(investigation_id: str, db: Session = Depends(get_db)) -> GraphRes
 )
 def list_events(
     investigation_id: str,
-    db: Session = Depends(get_db),
+    repo: Neo4jRepository = Depends(get_repository),
     limit: int = Query(default=200, ge=1, le=1000),
 ) -> list[CrawlEventRead]:
     """The persisted crawl timeline, oldest first."""
-    _get_investigation(db, investigation_id)
-    events = db.scalars(
-        select(CrawlEvent)
-        .where(CrawlEvent.investigation_id == investigation_id)
-        .order_by(CrawlEvent.timestamp, CrawlEvent.id)
-        .limit(limit)
-    )
+    _get_investigation(repo, investigation_id)
+    events = repo.list_events(investigation_id, limit=limit)
     return [CrawlEventRead.model_validate(event) for event in events]
+
+
+# ``/activity`` is the name section 27 uses for the timeline; both spellings
+# reach the same data so neither the spec nor existing clients are surprised.
+@router.get(
+    "/{investigation_id}/activity",
+    response_model=list[CrawlEventRead],
+    summary="Investigation activity log",
+)
+def list_activity(
+    investigation_id: str,
+    repo: Neo4jRepository = Depends(get_repository),
+    limit: int = Query(default=200, ge=1, le=1000),
+) -> list[CrawlEventRead]:
+    """Alias of ``/events``: the crawl and analysis activity log."""
+    return list_events(investigation_id, repo=repo, limit=limit)
 
 
 @router.get(
     "/{investigation_id}/export",
-    response_model=InvestigationExport,
-    summary="Export an investigation as JSON",
+    summary="Export an investigation as JSON or CSV",
+    # The handler returns either a model or a prepared Response, which FastAPI
+    # cannot turn into a single response schema.
+    response_model=None,
+    responses={
+        200: {
+            "content": {
+                "application/json": {},
+                "text/csv": {"schema": {"type": "string"}},
+            }
+        }
+    },
 )
 def export_investigation(
     investigation_id: str,
-    db: Session = Depends(get_db),
+    repo: Neo4jRepository = Depends(get_repository),
     download: bool = Query(default=False),
-) -> InvestigationExport | JSONResponse:
-    """Full JSON export: entities, relationships, evidence and timeline."""
-    investigation = _get_investigation(db, investigation_id)
-    export = InvestigationService(db).export(investigation)
+    format: ExportFormat = Query(
+        default=ExportFormat.JSON,
+        description="json is the complete record; csv is one row per relationship.",
+    ),
+) -> InvestigationExport | JSONResponse | PlainTextResponse:
+    """Export an investigation.
+
+    ``json`` carries everything - investigation, entities, relationships,
+    evidence, snapshots, analyst decisions and the timeline.  ``csv`` is the
+    flat, spreadsheet-friendly view: one row per relationship with its evidence
+    collapsed into two columns.
+    """
+    investigation = _get_investigation(repo, investigation_id)
+    service = InvestigationService(repo)
+    stem = f"investigation-{investigation.seed_identifier}-{investigation.id[:8]}"
+
+    if format is ExportFormat.CSV:
+        return PlainTextResponse(
+            content=service.export_csv(investigation),
+            media_type="text/csv; charset=utf-8",
+            headers={"Content-Disposition": f'attachment; filename="{stem}.csv"'},
+        )
+
+    export = service.export(investigation)
     if not download:
         return export
-    filename = f"investigation-{investigation.seed_identifier}-{investigation.id[:8]}.json"
     return JSONResponse(
         content=export.model_dump(mode="json"),
-        headers={"Content-Disposition": f'attachment; filename="{filename}"'},
+        headers={"Content-Disposition": f'attachment; filename="{stem}.json"'},
     )
 
 
@@ -270,19 +397,14 @@ def export_investigation(
     response_model=dict,
 )
 def investigation_summary(
-    investigation_id: str, db: Session = Depends(get_db)
+    investigation_id: str, repo: Neo4jRepository = Depends(get_repository)
 ) -> dict:
     """Entity/relationship/evidence counts plus per-status breakdown."""
-    _get_investigation(db, investigation_id)
-    rows = db.execute(
-        select(Relationship.analyst_status, func.count(Relationship.id))
-        .where(Relationship.investigation_id == investigation_id)
-        .group_by(Relationship.analyst_status)
-    ).all()
-    entities, relationships, evidence = InvestigationService(db).counts(investigation_id)
+    _get_investigation(repo, investigation_id)
+    entities, relationships, evidence = repo.counts(investigation_id)
     return {
         "entities": entities,
         "relationships": relationships,
         "evidence": evidence,
-        "analyst_status": {row[0]: row[1] for row in rows},
+        "analyst_status": repo.analyst_status_counts(investigation_id),
     }
