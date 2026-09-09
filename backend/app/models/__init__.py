@@ -1,7 +1,7 @@
-"""SQLAlchemy models and the vocabularies they use."""
+"""Domain records stored in Neo4j, and the vocabularies they use."""
 
-from .base import Base, new_id, utcnow
-from .entity import Entity
+from .base import as_datetime, new_id, utcnow
+from .entity import ENTITY_LABEL, Entity, type_label
 from .enums import (
     RELATIONSHIP_LABELS,
     AnalystStatus,
@@ -19,7 +19,7 @@ from .snapshot import Snapshot
 
 __all__ = [
     "AnalystStatus",
-    "Base",
+    "ENTITY_LABEL",
     "ConfidenceLevel",
     "CrawlEvent",
     "DiscoveryMethod",
@@ -33,6 +33,8 @@ __all__ = [
     "Relationship",
     "RelationshipType",
     "Snapshot",
+    "as_datetime",
     "new_id",
+    "type_label",
     "utcnow",
 ]

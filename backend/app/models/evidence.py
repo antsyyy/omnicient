@@ -1,69 +1,80 @@
-"""Evidence table: why a relationship exists and what it is worth.
+"""Evidence record: why a relationship exists and what it is worth.
 
 Evidence is first class in Omnicient.  Every point of every score traces back
-to a row here, with the URL the observation came from, so an analyst can
-reconstruct a score by reading its evidence list.  The schema is intentionally
-flat and self-describing so a future retrieval layer (section 43) can index it.
+to one of these, with the URL the observation came from, so an analyst can
+reconstruct a score by reading its evidence list.
+
+Storage note: Neo4j relationships cannot themselves be the endpoint of another
+relationship, so the ``SUPPORTED_BY`` edge sketched in section 9 is realised as
+an ``(:Evidence)`` node that carries the ``relationship_id`` of the scored edge
+and is attached to the investigation and to both entities it concerns.  The
+scored association stays a native Neo4j relationship, which is what section 7
+asks for and what makes the graph traversable.
 """
 
 from __future__ import annotations
 
+from dataclasses import dataclass, field
 from datetime import datetime
+from typing import Any
 
-from sqlalchemy import (
-    JSON,
-    DateTime,
-    Float,
-    ForeignKey,
-    Index,
-    String,
-    Text,
-)
-from sqlalchemy.orm import Mapped, mapped_column
-from sqlalchemy.orm import relationship as orm_relationship
-
-from .base import Base, IdMixin, utcnow
+from .base import as_datetime, new_id, utcnow
+from .entity import _json_field
+from .enums import EvidenceStance, evidence_stance
 
 
-class Evidence(IdMixin, Base):
+@dataclass
+class Evidence:
     """One observation supporting or contradicting a relationship."""
 
-    __tablename__ = "evidence"
-    __table_args__ = (Index("ix_evidence_relationship", "relationship_id"),)
+    investigation_id: str
+    source_entity_id: str
+    type: str
+    description: str
+    id: str = field(default_factory=new_id)
 
-    investigation_id: Mapped[str] = mapped_column(
-        String(32), ForeignKey("investigations.id", ondelete="CASCADE"), nullable=False
-    )
-    relationship_id: Mapped[str | None] = mapped_column(
-        String(32), ForeignKey("relationships.id", ondelete="CASCADE"), nullable=True
-    )
-    source_entity_id: Mapped[str] = mapped_column(
-        String(32), ForeignKey("entities.id", ondelete="CASCADE"), nullable=False
-    )
-    target_entity_id: Mapped[str | None] = mapped_column(
-        String(32), ForeignKey("entities.id", ondelete="CASCADE"), nullable=True
-    )
+    relationship_id: str | None = None
+    target_entity_id: str | None = None
 
-    type: Mapped[str] = mapped_column(String(30), nullable=False)
-    description: Mapped[str] = mapped_column(Text, nullable=False)
-    source_url: Mapped[str | None] = mapped_column(String(1000), nullable=True)
-    extracted_value: Mapped[str | None] = mapped_column(Text, nullable=True)
-    weight: Mapped[float] = mapped_column(Float, default=0.0, nullable=False)
-    supports: Mapped[bool] = mapped_column(default=True, nullable=False)
-    context: Mapped[dict | None] = mapped_column(JSON, nullable=True)
+    source_url: str | None = None
+    #: The value exactly as it was published.
+    extracted_value: str | None = None
+    #: The comparison form the engine actually matched on.  Kept alongside the
+    #: raw value so an analyst can see *why* two differently-written values
+    #: were treated as the same observation.
+    normalized_value: str | None = None
+    weight: float = 0.0
+    supports: bool = True
+    context: dict[str, Any] | None = None
 
-    collected_at: Mapped[datetime] = mapped_column(
-        DateTime(timezone=True), default=utcnow, nullable=False
-    )
+    collected_at: datetime = field(default_factory=utcnow)
 
-    # The attribute is named ``relationship`` to match the documented evidence
-    # model, so the SQLAlchemy helper is imported under an alias.
-    relationship: Mapped["Relationship | None"] = orm_relationship(  # noqa: F821
-        back_populates="evidence"
-    )
-    investigation: Mapped["Investigation"] = orm_relationship(  # noqa: F821
-        back_populates="evidence"
-    )
+    @classmethod
+    def from_node(cls, node: Any) -> "Evidence":
+        """Build a record from a Neo4j node."""
+        data = dict(node)
+        raw_context = data.get("context")
+        return cls(
+            id=data["id"],
+            investigation_id=data["investigation_id"],
+            relationship_id=data.get("relationship_id"),
+            source_entity_id=data["source_entity_id"],
+            target_entity_id=data.get("target_entity_id"),
+            type=data.get("type", ""),
+            description=data.get("description", ""),
+            source_url=data.get("source_url"),
+            extracted_value=data.get("extracted_value"),
+            normalized_value=data.get("normalized_value"),
+            weight=float(data.get("weight", 0.0)),
+            supports=bool(data.get("supports", True)),
+            context=_json_field(raw_context) if raw_context else None,
+            collected_at=as_datetime(data.get("collected_at")) or utcnow(),
+        )
+
+    @property
+    def stance(self) -> EvidenceStance:
+        """Whether this observation argues for, against, or neither."""
+        return evidence_stance(self.weight, self.supports)
 
     def __repr__(self) -> str:  # pragma: no cover - debugging helper
         return f"<Evidence {self.type} weight={self.weight:+.0f}>"

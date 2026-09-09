@@ -1,8 +1,8 @@
 """Investigation orchestration.
 
 This is the seam between the async, network-facing half of Omnicient (sources
-and crawler) and the synchronous, database-facing half (models and API).  The
-crawler produces observations in memory; this service persists them, runs
+and crawler) and the storage-facing half (records and repository).  The crawler
+produces observations in memory; this service persists them to Neo4j, runs
 correlation over them, and records the timeline the analyst reads.
 
 A failing source never fails an investigation: source problems are recorded as
@@ -15,9 +15,6 @@ from __future__ import annotations
 from dataclasses import dataclass
 from datetime import UTC, datetime
 
-from sqlalchemy import delete, func, select
-from sqlalchemy.orm import Session
-
 from ..config import Settings, get_settings
 from ..models.entity import Entity
 from ..models.enums import (
@@ -25,12 +22,15 @@ from ..models.enums import (
     ConfidenceLevel,
     DiscoveryMethod,
     EntityType,
+    EvidenceType,
     InvestigationStatus,
+    RelationshipType,
 )
 from ..models.evidence import Evidence
 from ..models.investigation import CrawlEvent, Investigation
 from ..models.relationship import Relationship
 from ..models.snapshot import Snapshot
+from ..repository import Neo4jRepository
 from ..schemas.investigation import (
     InvestigationCreate,
     InvestigationExport,
@@ -38,9 +38,10 @@ from ..schemas.investigation import (
     SourceIssue,
 )
 from ..sources import SourceRegistry, build_registry
+from ..utils.identifier import detect_identifier
 from ..utils.logging import get_logger
 from ..utils.normalization import platform_label
-from ..utils.validation import validate_seed_identifier
+from .alias_detection import AliasCandidate, AliasDetector, normalize_alias_candidate
 from .correlation import CorrelationEngine, CorrelationResult
 from .crawler import Crawler, CrawlOutcome, ObservedEntity
 
@@ -75,20 +76,35 @@ class RunSummary:
 class InvestigationService:
     """Creates, runs, reads and exports investigations."""
 
-    def __init__(self, db: Session, settings: Settings | None = None) -> None:
-        self.db = db
+    def __init__(
+        self, repo: Neo4jRepository, settings: Settings | None = None
+    ) -> None:
+        self.repo = repo
         self.settings = settings or get_settings()
 
     # -- creation ----------------------------------------------------------
 
     def create(self, payload: InvestigationCreate) -> Investigation:
-        """Create an investigation from a validated seed identifier."""
-        identifier = validate_seed_identifier(payload.identifier)
+        """Create an investigation from a raw analyst input.
+
+        The analyst supplies one identifier and no platform (section 3.2):
+        :func:`detect_identifier` classifies it, and the platform is only ever
+        taken from the input itself - a profile URL names its own platform - or
+        from an explicit override.
+        """
+        # detect_identifier is the validation: it enforces length, rejects
+        # empty and unrecognized input, and refuses non-HTTP schemes.  Running
+        # a username normalizer first would reject valid email seeds.
+        detected = detect_identifier(payload.identifier)
+        platform = payload.platform or detected.seed_platform
+        identifier = detected.identifier
         demo = self.settings.demo_mode if payload.demo is None else payload.demo
         investigation = Investigation(
-            name=payload.name or self._default_name(payload.platform, identifier, demo),
-            seed_platform=payload.platform,
+            name=payload.name or self._default_name(platform, identifier, demo),
+            seed_platform=platform,
             seed_identifier=identifier,
+            seed_input=detected.raw,
+            seed_type=str(detected.type),
             status=InvestigationStatus.CREATED,
             demo=demo,
             max_depth=payload.max_depth
@@ -98,20 +114,18 @@ class InvestigationService:
             if payload.max_pages is not None
             else self.settings.max_pages,
         )
-        self.db.add(investigation)
-        self.db.flush()
+        investigation = self.repo.create_investigation(investigation)
         self._event(
             investigation,
             "investigation_created",
-            f"Investigation created for {platform_label(payload.platform)} "
-            f"@{identifier}",
+            f"Investigation created for {platform_label(platform)} @{identifier}",
             data={"seed": investigation.seed_label, "demo": demo},
         )
-        self.db.commit()
         logger.info(
-            "investigation_created id=%s seed=%s demo=%s",
+            "investigation_created id=%s seed=%s type=%s demo=%s",
             investigation.id,
             investigation.seed_label,
+            detected.type,
             demo,
         )
         return investigation
@@ -133,14 +147,29 @@ class InvestigationService:
     ) -> RunSummary:
         """Crawl, correlate and persist.  Never raises for source failures."""
         if reset:
-            self._reset(investigation)
+            self.repo.reset_investigation(investigation.id)
 
         investigation.status = InvestigationStatus.CRAWLING
         investigation.status_message = None
         investigation.started_at = datetime.now(UTC)
+        investigation.completed_at = None
         investigation.max_depth = max_depth or investigation.max_depth
         investigation.max_pages = max_pages or investigation.max_pages
-        self.db.commit()
+        self.repo.save_investigation(investigation)
+        self._event(
+            investigation,
+            "identifier_detected",
+            (
+                f"Seed identifier detected: {investigation.seed_type or 'USERNAME'} "
+                f"{investigation.seed_identifier}"
+            ),
+            data={
+                "raw": investigation.seed_input,
+                "identifier_type": investigation.seed_type,
+                "identifier": investigation.seed_identifier,
+                "platform": investigation.seed_platform,
+            },
+        )
 
         registry = self._registry(investigation)
         try:
@@ -154,28 +183,46 @@ class InvestigationService:
             logger.exception("crawl_failed investigation=%s", investigation.id)
             investigation.status = InvestigationStatus.FAILED
             investigation.status_message = str(exc)
+            self.repo.save_investigation(investigation)
             self._event(
                 investigation,
                 "investigation_failed",
                 f"Investigation failed: {exc}",
                 level="ERROR",
             )
-            self.db.commit()
             return RunSummary()
         finally:
             await registry.aclose()
+
+        # The crawler buffers its timeline in memory; write it out before the
+        # analysis events so the activity log stays chronological.
+        self._record_events(investigation, outcome)
 
         entity_map = self._persist_entities(investigation, outcome)
         evidence_count = self._persist_links(investigation, outcome, entity_map)
         self._warn_if_seed_unresolved(investigation, outcome, entity_map)
 
         investigation.status = InvestigationStatus.ANALYZING
-        self.db.flush()
+        self.repo.save_investigation(investigation)
 
         results = CorrelationEngine(self.settings.scoring).correlate(outcome.profiles)
         correlation_evidence = self._persist_correlations(
             investigation, results, entity_map
         )
+        aliases = AliasDetector(self.settings.scoring).detect(
+            outcome.profiles, results
+        )
+        alias_evidence = self._persist_aliases(investigation, aliases, entity_map)
+        if aliases:
+            self._event(
+                investigation,
+                "aliases_detected",
+                (
+                    f"{len(aliases)} potential aliases proposed from handle "
+                    f"transformations"
+                ),
+                data={"aliases": len(aliases)},
+            )
         self._event(
             investigation,
             "correlation_completed",
@@ -186,23 +233,14 @@ class InvestigationService:
             data={"candidates": len(outcome.profiles), "relationships": len(results)},
         )
 
-        for record in outcome.events:
-            self._event(
-                investigation,
-                record.event,
-                record.message,
-                level=record.level,
-                data=record.data,
-            )
-
         investigation.status = InvestigationStatus.COMPLETED
         investigation.completed_at = datetime.now(UTC)
-        self.db.commit()
+        self.repo.save_investigation(investigation)
 
         summary = RunSummary(
             entities=len(entity_map),
             relationships=len(outcome.links) + len(results),
-            evidence=evidence_count + correlation_evidence,
+            evidence=evidence_count + correlation_evidence + alias_evidence,
             pages_fetched=outcome.pages_fetched,
             issues=[
                 SourceIssue(
@@ -214,6 +252,20 @@ class InvestigationService:
                 )
                 for issue in outcome.issues
             ],
+        )
+        self._event(
+            investigation,
+            "investigation_completed",
+            (
+                f"Investigation completed: {summary.entities} entities, "
+                f"{summary.relationships} relationships, "
+                f"{summary.evidence} evidence items"
+            ),
+            data={
+                "entities": summary.entities,
+                "relationships": summary.relationships,
+                "evidence": summary.evidence,
+            },
         )
         logger.info(
             "investigation_completed id=%s entities=%d relationships=%d evidence=%d",
@@ -237,7 +289,20 @@ class InvestigationService:
         is not part of the synthetic dataset.
         """
         seed = entities.get(outcome.seed_key) if outcome.seed_key else None
-        if seed is None or seed.resolved:
+        if seed is None:
+            return
+
+        if seed.type == str(EntityType.USERNAME):
+            # A bare handle seeds a pivot node that always "resolves".  What
+            # matters is whether any source actually answered for it.
+            found = any(
+                entity.resolved
+                for key, entity in entities.items()
+                if key != outcome.seed_key
+            )
+            if found:
+                return
+        elif seed.resolved:
             return
 
         if investigation.demo:
@@ -252,7 +317,7 @@ class InvestigationService:
             reason = "NOT_IN_DEMO_DATASET"
         else:
             message = (
-                f"No public data could be read for the seed "
+                f"No supported source returned public data for "
                 f"{investigation.seed_label}, so there was nothing to expand from."
             )
             reason = "SEED_UNRESOLVED"
@@ -277,14 +342,6 @@ class InvestigationService:
             return build_demo_registry()
         return build_registry(self.settings)
 
-    def _reset(self, investigation: Investigation) -> None:
-        """Drop previously discovered data before a re-crawl."""
-        for model in (Evidence, Relationship, Entity, CrawlEvent):
-            self.db.execute(
-                delete(model).where(model.investigation_id == investigation.id)
-            )
-        self.db.flush()
-
     # -- persistence -------------------------------------------------------
 
     def _persist_entities(
@@ -292,11 +349,12 @@ class InvestigationService:
     ) -> dict[tuple[str, str, str], Entity]:
         """Store observed entities and write a snapshot for each observation."""
         stored: dict[tuple[str, str, str], Entity] = {}
+        snapshots: list[Snapshot] = []
         for observed in outcome.entities.values():
             entity = self._upsert_entity(investigation, observed)
             stored[observed.key] = entity
             if observed.profile is not None:
-                self.db.add(
+                snapshots.append(
                     Snapshot(
                         entity_id=entity.id,
                         username=observed.identifier,
@@ -307,44 +365,35 @@ class InvestigationService:
                         meta={"source": observed.profile.source or observed.platform},
                     )
                 )
-        self.db.flush()
+        self.repo.add_snapshots(snapshots)
+        self._event(
+            investigation,
+            "entities_discovered",
+            f"{len(stored)} entities discovered "
+            f"({sum(1 for e in stored.values() if e.resolved)} with public data)",
+            data={"entities": len(stored)},
+        )
         return stored
 
     def _upsert_entity(
         self, investigation: Investigation, observed: ObservedEntity
     ) -> Entity:
-        """Create or refresh the row for an observed entity."""
-        entity = self.db.scalar(
-            select(Entity).where(
-                Entity.investigation_id == investigation.id,
-                Entity.type == str(observed.entity_type),
-                Entity.platform == observed.platform,
-                Entity.identifier == observed.identifier,
-            )
-        )
-        now = datetime.now(UTC)
+        """Create or refresh the node for an observed entity."""
         profile = observed.profile
-
-        if entity is None:
-            entity = Entity(
-                investigation_id=investigation.id,
-                type=str(observed.entity_type),
-                platform=observed.platform,
-                identifier=observed.identifier,
-                name=observed.name,
-                is_seed=observed.is_seed,
-                first_seen=now,
-            )
-            self.db.add(entity)
-
-        entity.name = observed.name
-        entity.url = observed.url or entity.url
-        entity.depth = observed.depth
-        entity.discovery_method = str(observed.method)
-        entity.discovered_via = observed.discovered_via
-        entity.resolved = observed.resolved
-        entity.last_seen = now
-        entity.source = profile.source if profile else None
+        entity = Entity(
+            investigation_id=investigation.id,
+            type=str(observed.entity_type),
+            platform=observed.platform,
+            identifier=observed.identifier,
+            name=observed.name,
+            url=observed.url,
+            depth=observed.depth,
+            discovery_method=str(observed.method),
+            discovered_via=observed.discovered_via,
+            resolved=observed.resolved,
+            is_seed=observed.is_seed,
+            source=profile.source if profile else None,
+        )
 
         if profile is not None:
             entity.display_name = profile.display_name
@@ -370,10 +419,9 @@ class InvestigationService:
                 ],
             }
         elif investigation.demo:
-            entity.meta = {**(entity.meta or {}), "demo": True, "notice": "DEMO DATA"}
+            entity.meta = {"demo": True, "notice": "DEMO DATA"}
 
-        self.db.flush()
-        return entity
+        return self.repo.upsert_entity(entity)
 
     def _persist_links(
         self,
@@ -383,7 +431,7 @@ class InvestigationService:
     ) -> int:
         """Store the explicit links the crawler observed, with their evidence."""
         engine = CorrelationEngine(self.settings.scoring)
-        count = 0
+        evidence: list[Evidence] = []
         for link in outcome.links:
             source = entities.get(link.source_key)
             target = entities.get(link.target_key)
@@ -398,7 +446,7 @@ class InvestigationService:
                 level=str(engine.score_to_level(link.weight)),
                 summary=link.description,
             )
-            self.db.add(
+            evidence.append(
                 Evidence(
                     investigation_id=investigation.id,
                     relationship_id=relationship.id,
@@ -412,9 +460,7 @@ class InvestigationService:
                     supports=True,
                 )
             )
-            count += 1
-        self.db.flush()
-        return count
+        return self.repo.add_evidence(evidence)
 
     def _persist_correlations(
         self,
@@ -423,7 +469,7 @@ class InvestigationService:
         entities: dict[tuple[str, str, str], Entity],
     ) -> int:
         """Store correlation relationships and every evidence item behind them."""
-        count = 0
+        evidence: list[Evidence] = []
         for result in results:
             source = entities.get(result.source_key)
             target = entities.get(result.target_key)
@@ -438,24 +484,88 @@ class InvestigationService:
                 level=str(result.confidence_level),
                 summary=result.summary,
             )
-            for item in result.evidence:
-                self.db.add(
+            evidence.extend(
+                Evidence(
+                    investigation_id=investigation.id,
+                    relationship_id=relationship.id,
+                    source_entity_id=source.id,
+                    target_entity_id=target.id,
+                    type=str(item.type),
+                    description=item.description,
+                    source_url=item.source_url,
+                    extracted_value=item.extracted_value,
+                    normalized_value=item.normalized_value,
+                    weight=item.weight,
+                    supports=item.supports,
+                )
+                for item in result.evidence
+            )
+        return self.repo.add_evidence(evidence)
+
+    def _persist_aliases(
+        self,
+        investigation: Investigation,
+        candidates: list[AliasCandidate],
+        entities: dict[tuple[str, str, str], Entity],
+    ) -> int:
+        """Store potential aliases as their own edge type, with their signals.
+
+        A ``POTENTIAL_ALIAS`` is deliberately distinct from
+        ``POTENTIAL_SAME_IDENTITY``: it says the *handles* look related, which
+        is a narrower and weaker claim than saying the accounts might be one
+        person.  Keeping them apart lets an analyst filter for one without the
+        other.
+        """
+        evidence: list[Evidence] = []
+        for candidate in candidates:
+            account = str(EntityType.ACCOUNT)
+            source = entities.get(
+                (account, candidate.source_platform or "", candidate.source_identifier)
+            )
+            target = entities.get(
+                (account, candidate.target_platform or "", candidate.target_identifier)
+            )
+            if source is None or target is None:  # pragma: no cover - defensive
+                continue
+
+            relationship = self._upsert_relationship(
+                investigation,
+                source,
+                target,
+                str(RelationshipType.POTENTIAL_ALIAS),
+                score=candidate.score,
+                level=candidate.confidence,
+                summary=candidate.summary,
+            )
+            # One evidence row per transformation, so the alias is as
+            # traceable as any other scored relationship.
+            for signal in candidate.signals:
+                if signal.kind in {str(item.type) for item in candidate.supporting_evidence}:
+                    # Contextual evidence is already stored against the
+                    # correlation edge; do not duplicate the row.
+                    continue
+                evidence.append(
                     Evidence(
                         investigation_id=investigation.id,
                         relationship_id=relationship.id,
                         source_entity_id=source.id,
                         target_entity_id=target.id,
-                        type=str(item.type),
-                        description=item.description,
-                        source_url=item.source_url,
-                        extracted_value=item.extracted_value,
-                        weight=item.weight,
-                        supports=item.supports,
+                        type=str(EvidenceType.USERNAME_TRANSFORMATION),
+                        description=f"{signal.label}: {signal.detail}",
+                        extracted_value=candidate.target_identifier,
+                        normalized_value=normalize_alias_candidate(
+                            candidate.target_identifier
+                        ),
+                        weight=0.0,
+                        supports=True,
+                        context={
+                            "transformation": signal.kind,
+                            "similarity": candidate.similarity,
+                            "strength": str(candidate.strength),
+                        },
                     )
                 )
-                count += 1
-        self.db.flush()
-        return count
+        return self.repo.add_evidence(evidence)
 
     def _upsert_relationship(
         self,
@@ -469,28 +579,18 @@ class InvestigationService:
         summary: str | None,
     ) -> Relationship:
         """Create or refresh a relationship, preserving the analyst's verdict."""
-        relationship = self.db.scalar(
-            select(Relationship).where(
-                Relationship.investigation_id == investigation.id,
-                Relationship.source_entity_id == source.id,
-                Relationship.target_entity_id == target.id,
-                Relationship.relationship_type == relationship_type,
-            )
-        )
-        if relationship is None:
-            relationship = Relationship(
+        return self.repo.upsert_relationship(
+            Relationship(
                 investigation_id=investigation.id,
                 source_entity_id=source.id,
                 target_entity_id=target.id,
                 relationship_type=relationship_type,
+                confidence_score=round(float(score), 1),
+                confidence_level=level,
                 analyst_status=AnalystStatus.UNREVIEWED,
+                summary=summary,
             )
-            self.db.add(relationship)
-        relationship.confidence_score = round(float(score), 1)
-        relationship.confidence_level = level
-        relationship.summary = summary
-        self.db.flush()
-        return relationship
+        )
 
     # -- reading -----------------------------------------------------------
 
@@ -502,38 +602,43 @@ class InvestigationService:
         level: str = "INFO",
         data: dict | None = None,
     ) -> None:
-        self.db.add(
-            CrawlEvent(
-                investigation_id=investigation.id,
-                event=event,
-                message=message,
-                level=level,
-                data=data,
-            )
+        """Append one line to the activity timeline.
+
+        Events are written as they happen rather than batched at the end, so
+        the interface can poll the timeline while a crawl is still running.
+        """
+        self.repo.add_events(
+            [
+                CrawlEvent(
+                    investigation_id=investigation.id,
+                    event=event,
+                    message=message,
+                    level=level,
+                    data=data,
+                )
+            ]
+        )
+
+    def _record_events(
+        self, investigation: Investigation, outcome: CrawlOutcome
+    ) -> None:
+        """Persist the crawler's buffered timeline in one round trip."""
+        self.repo.add_events(
+            [
+                CrawlEvent(
+                    investigation_id=investigation.id,
+                    event=record.event,
+                    message=record.message,
+                    level=record.level,
+                    data=record.data,
+                )
+                for record in outcome.events
+            ]
         )
 
     def counts(self, investigation_id: str) -> tuple[int, int, int]:
         """``(entities, relationships, evidence)`` for one investigation."""
-        return (
-            self.db.scalar(
-                select(func.count(Entity.id)).where(
-                    Entity.investigation_id == investigation_id
-                )
-            )
-            or 0,
-            self.db.scalar(
-                select(func.count(Relationship.id)).where(
-                    Relationship.investigation_id == investigation_id
-                )
-            )
-            or 0,
-            self.db.scalar(
-                select(func.count(Evidence.id)).where(
-                    Evidence.investigation_id == investigation_id
-                )
-            )
-            or 0,
-        )
+        return self.repo.counts(investigation_id)
 
     def to_read(self, investigation: Investigation) -> InvestigationRead:
         """Serialize an investigation with its headline counts."""
@@ -549,13 +654,8 @@ class InvestigationService:
 
     def issues(self, investigation_id: str) -> list[SourceIssue]:
         """Source failures recorded during the most recent run."""
-        events = self.db.scalars(
-            select(CrawlEvent)
-            .where(
-                CrawlEvent.investigation_id == investigation_id,
-                CrawlEvent.event.in_(ISSUE_EVENTS),
-            )
-            .order_by(CrawlEvent.timestamp)
+        events = self.repo.list_events(
+            investigation_id, events=list(ISSUE_EVENTS)
         )
         issues: list[SourceIssue] = []
         for event in events:
@@ -572,49 +672,27 @@ class InvestigationService:
         return issues
 
     def seed_entity(self, investigation_id: str) -> Entity | None:
-        return self.db.scalar(
-            select(Entity).where(
-                Entity.investigation_id == investigation_id, Entity.is_seed.is_(True)
-            )
-        )
+        return self.repo.seed_entity(investigation_id)
 
     # -- export ------------------------------------------------------------
 
     def export(self, investigation: Investigation) -> InvestigationExport:
         """Complete JSON export of an investigation (section 39)."""
-        from ..schemas.entity import EntityRead
+        from ..schemas.entity import EntityRead, SnapshotRead
         from ..schemas.evidence import EvidenceRead
         from ..schemas.investigation import CrawlEventRead
         from ..schemas.relationship import RelationshipRead
 
-        entities = list(
-            self.db.scalars(
-                select(Entity)
-                .where(Entity.investigation_id == investigation.id)
-                .order_by(Entity.depth, Entity.created_at)
-            )
-        )
-        relationships = list(
-            self.db.scalars(
-                select(Relationship)
-                .where(Relationship.investigation_id == investigation.id)
-                .order_by(Relationship.confidence_score.desc())
-            )
-        )
-        evidence = list(
-            self.db.scalars(
-                select(Evidence)
-                .where(Evidence.investigation_id == investigation.id)
-                .order_by(Evidence.collected_at)
-            )
-        )
-        events = list(
-            self.db.scalars(
-                select(CrawlEvent)
-                .where(CrawlEvent.investigation_id == investigation.id)
-                .order_by(CrawlEvent.timestamp)
-            )
-        )
+        entities = self.repo.list_entities(investigation.id)
+        relationships = self.repo.list_relationships(investigation.id)
+        evidence = self.repo.list_evidence(investigation.id)
+        events = self.repo.list_events(investigation.id, limit=1000)
+
+        snapshots = [
+            SnapshotRead.model_validate(snapshot)
+            for entity in entities
+            for snapshot in self.repo.snapshots_for_entity(entity.id)
+        ]
 
         return InvestigationExport(
             generated_at=datetime.now(UTC),
@@ -633,8 +711,83 @@ class InvestigationService:
                 for relationship in relationships
             ],
             evidence=[EvidenceRead.model_validate(item) for item in evidence],
+            snapshots=snapshots,
             crawl_events=[CrawlEventRead.model_validate(event) for event in events],
         )
+
+
+    def export_csv(self, investigation: Investigation) -> str:
+        """Flat CSV export of an investigation (section 29).
+
+        One row per relationship, with its endpoints, score, analyst verdict
+        and its evidence collapsed into two columns.  A relationship with no
+        evidence would be a claim without a reason, so the supporting and
+        contradicting columns are always written even when empty.
+        """
+        import csv
+        import io
+
+        entities = {
+            entity.id: entity for entity in self.repo.list_entities(investigation.id)
+        }
+        relationships = self.repo.attach_evidence(
+            self.repo.list_relationships(investigation.id)
+        )
+
+        buffer = io.StringIO()
+        writer = csv.writer(buffer, lineterminator="\n")
+        writer.writerow(
+            [
+                "investigation_id",
+                "investigation_name",
+                "demo_data",
+                "source_platform",
+                "source_identifier",
+                "target_platform",
+                "target_identifier",
+                "relationship_type",
+                "score",
+                "confidence",
+                "analyst_status",
+                "analyst_note",
+                "reviewed_at",
+                "supporting_evidence",
+                "contradicting_evidence",
+            ]
+        )
+
+        def describe(items: list[Evidence], supports: bool) -> str:
+            return " | ".join(
+                f"{item.type} ({item.weight:+.0f}): {item.description}"
+                for item in items
+                if item.supports is supports
+            )
+
+        for relationship in relationships:
+            source = entities.get(relationship.source_entity_id)
+            target = entities.get(relationship.target_entity_id)
+            writer.writerow(
+                [
+                    investigation.id,
+                    investigation.name,
+                    "yes" if investigation.demo else "no",
+                    source.platform if source else "",
+                    source.identifier if source else "",
+                    target.platform if target else "",
+                    target.identifier if target else "",
+                    relationship.relationship_type,
+                    f"{relationship.confidence_score:g}",
+                    relationship.confidence_level,
+                    relationship.analyst_status,
+                    relationship.analyst_note or "",
+                    relationship.reviewed_at.isoformat()
+                    if relationship.reviewed_at
+                    else "",
+                    describe(relationship.evidence, True),
+                    describe(relationship.evidence, False),
+                ]
+            )
+        return buffer.getvalue()
 
 
 # Re-exported so callers can describe a level without importing the enum path.

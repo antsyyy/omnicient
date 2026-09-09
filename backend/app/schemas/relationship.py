@@ -30,6 +30,8 @@ class RelationshipRead(BaseModel):
     confidence_level: ConfidenceLevel
     analyst_status: AnalystStatus
     analyst_note: str | None = None
+    #: When the analyst last recorded a verdict (section 25).
+    reviewed_at: datetime | None = None
     summary: str | None = None
     evidence_ids: list[str] = Field(default_factory=list)
     created_at: datetime

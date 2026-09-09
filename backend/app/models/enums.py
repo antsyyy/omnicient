@@ -34,6 +34,10 @@ class RelationshipType(StrEnum):
     SHARED_AVATAR = "SHARED_AVATAR"
     SHARED_ATTRIBUTE = "SHARED_ATTRIBUTE"
     POTENTIAL_SAME_IDENTITY = "POTENTIAL_SAME_IDENTITY"
+    #: One handle is a plausible naming variant of the other.  Narrower than
+    #: POTENTIAL_SAME_IDENTITY: it is a claim about the *handles*, not about
+    #: the people behind them, and it never asserts an identity on its own.
+    POTENTIAL_ALIAS = "POTENTIAL_ALIAS"
     CONTRADICTORY = "CONTRADICTORY"
 
 
@@ -47,6 +51,7 @@ RELATIONSHIP_LABELS: dict[str, str] = {
     RelationshipType.SHARED_AVATAR: "Shared Avatar",
     RelationshipType.SHARED_ATTRIBUTE: "Shared Attribute",
     RelationshipType.POTENTIAL_SAME_IDENTITY: "Potential Same Identity",
+    RelationshipType.POTENTIAL_ALIAS: "Potential Alias",
     RelationshipType.CONTRADICTORY: "Contradictory",
 }
 
@@ -86,10 +91,38 @@ class EvidenceType(StrEnum):
     SHARED_EMAIL = "SHARED_EMAIL"
     SHARED_ORGANIZATION = "SHARED_ORGANIZATION"
     CONTRADICTORY_ATTRIBUTE = "CONTRADICTORY_ATTRIBUTE"
+    #: A handle is a deterministic transformation of another (section: alias
+    #: detection).  The transformation itself is recorded in ``context``.
+    USERNAME_TRANSFORMATION = "USERNAME_TRANSFORMATION"
+    #: Both handles share a substantial root token ("alice" in alice_98 /
+    #: alice-security).  Weak on its own; meaningful alongside context.
+    SHARED_ROOT_TOKEN = "SHARED_ROOT_TOKEN"
 
 
 # Evidence that argues against a relationship rather than for it.
 NEGATIVE_EVIDENCE_TYPES = frozenset({EvidenceType.CONTRADICTORY_ATTRIBUTE})
+
+
+class EvidenceStance(StrEnum):
+    """What an observation does to a relationship.
+
+    ``supports`` alone cannot express an observation that was recorded but
+    changed nothing - a zero-weight item is real provenance (it was seen, at a
+    URL, at a time) without being an argument either way.
+    """
+
+    SUPPORTING = "SUPPORTING"
+    CONTRADICTORY = "CONTRADICTORY"
+    NEUTRAL = "NEUTRAL"
+
+
+def evidence_stance(weight: float, supports: bool) -> EvidenceStance:
+    """Classify an observation from its weight and direction."""
+    if not supports:
+        return EvidenceStance.CONTRADICTORY
+    if weight == 0:
+        return EvidenceStance.NEUTRAL
+    return EvidenceStance.SUPPORTING
 
 
 class InvestigationStatus(StrEnum):

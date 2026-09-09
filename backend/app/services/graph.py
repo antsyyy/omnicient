@@ -7,7 +7,7 @@ looks.  That split is what lets the interface and the OSINT backend be built
 in parallel against a fixed contract (section 47).
 
 NetworkX does the structural work here (degree, layered layout).  It is a
-processing library, not a store: the source of truth stays in SQLite.
+processing library, not a store: the source of truth stays in Neo4j.
 """
 
 from __future__ import annotations
@@ -15,14 +15,12 @@ from __future__ import annotations
 from datetime import UTC, datetime
 
 import networkx as nx
-from sqlalchemy import case, func, select
-from sqlalchemy.orm import Session
 
 from ..models.entity import Entity
 from ..models.enums import AnalystStatus, EntityType
-from ..models.evidence import Evidence
 from ..models.investigation import Investigation
 from ..models.relationship import Relationship
+from ..repository import Neo4jRepository
 from ..schemas.graph import (
     GraphEdge,
     GraphNode,
@@ -43,26 +41,14 @@ NODE_SPACING = 260
 class GraphService:
     """Builds the investigation graph payload."""
 
-    def __init__(self, db: Session) -> None:
-        self.db = db
+    def __init__(self, repo: Neo4jRepository) -> None:
+        self.repo = repo
 
     def build(self, investigation: Investigation) -> GraphResponse:
         """Assemble nodes, edges, layout and statistics for one investigation."""
-        entities = list(
-            self.db.scalars(
-                select(Entity)
-                .where(Entity.investigation_id == investigation.id)
-                .order_by(Entity.depth, Entity.created_at)
-            )
-        )
-        relationships = list(
-            self.db.scalars(
-                select(Relationship)
-                .where(Relationship.investigation_id == investigation.id)
-                .order_by(Relationship.confidence_score.desc())
-            )
-        )
-        evidence_counts = self._evidence_counts(investigation.id)
+        entities = self.repo.list_entities(investigation.id)
+        relationships = self.repo.list_relationships(investigation.id)
+        evidence_counts = self.repo.evidence_counts(investigation.id)
 
         graph = self._networkx_graph(entities, relationships)
         positions = self._layout(graph, entities)
@@ -126,23 +112,6 @@ class GraphService:
         return response
 
     # -- internals ---------------------------------------------------------
-
-    def _evidence_counts(self, investigation_id: str) -> dict[str, tuple[int, int]]:
-        """``relationship_id -> (total evidence, contradictions)``."""
-        rows = self.db.execute(
-            select(
-                Evidence.relationship_id,
-                func.count(Evidence.id),
-                func.sum(case((Evidence.supports.is_(False), 1), else_=0)),
-            )
-            .where(Evidence.investigation_id == investigation_id)
-            .group_by(Evidence.relationship_id)
-        ).all()
-        return {
-            row[0]: (int(row[1] or 0), int(row[2] or 0))
-            for row in rows
-            if row[0] is not None
-        }
 
     @staticmethod
     def _networkx_graph(

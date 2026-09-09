@@ -2,10 +2,12 @@
 
 from __future__ import annotations
 
-from fastapi import APIRouter
+from fastapi import APIRouter, Depends
 
 from ..config import get_settings
+from ..database import check_connection, get_repository
 from ..demo_data import DEMO_SEED_IDENTIFIER, DEMO_SEED_PLATFORM, demo_platforms
+from ..repository import Neo4jRepository
 from ..sources import ADAPTER_CLASSES
 
 router = APIRouter(tags=["health"])
@@ -17,14 +19,23 @@ def health() -> dict:
 
     The client uses ``demo_mode`` to decide whether to label investigations as
     synthetic, and ``sources`` to show which platforms can be queried live.
+    ``status`` is ``degraded`` when Neo4j cannot be reached.
     """
     settings = get_settings()
+    connected, error = check_connection()
     return {
-        "status": "ok",
+        "status": "ok" if connected else "degraded",
         "app": settings.app_name,
         "tagline": settings.tagline,
         "version": settings.version,
         "demo_mode": settings.demo_mode,
+        "database": {
+            "engine": "neo4j",
+            "connected": connected,
+            # The error *type* is enough to diagnose; connection strings and
+            # credentials never reach the client.
+            "error": error,
+        },
         "demo_seed": {
             "platform": DEMO_SEED_PLATFORM,
             "identifier": DEMO_SEED_IDENTIFIER,
@@ -42,3 +53,14 @@ def health() -> dict:
             for threshold, level in settings.scoring.bands
         ],
     }
+
+
+@router.get("/stats", summary="Headline numbers for the dashboard")
+def stats(repo: Neo4jRepository = Depends(get_repository)) -> dict:
+    """Totals across every investigation (section 19).
+
+    ``confirmed`` counts relationships an analyst reviewed and judged
+    supportive - it is not a count of proven identities.
+    """
+    totals = repo.global_stats()
+    return {**totals, "by_platform": repo.platform_totals()}

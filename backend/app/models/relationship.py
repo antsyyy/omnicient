@@ -1,15 +1,23 @@
-"""Relationship table: the scored, evidence-backed edges of the graph."""
+"""Relationship record: the scored, evidence-backed edges of the graph.
+
+Stored in Neo4j as a native relationship between two ``:Entity`` nodes, typed
+by :class:`RelationshipType` (``POTENTIAL_SAME_IDENTITY``, ``LINKS_TO``, ...)
+exactly as section 7 describes, so a Cypher traversal over the investigation
+reads the way the analyst reads the graph.
+"""
 
 from __future__ import annotations
 
-from sqlalchemy import Float, ForeignKey, Index, String, Text, UniqueConstraint
-from sqlalchemy.orm import Mapped, mapped_column, relationship
+from dataclasses import dataclass, field
+from datetime import datetime
+from typing import Any
 
-from .base import Base, IdMixin, TimestampMixin
+from .base import as_datetime, new_id, utcnow
 from .enums import AnalystStatus, ConfidenceLevel, RelationshipType
 
 
-class Relationship(IdMixin, TimestampMixin, Base):
+@dataclass
+class Relationship:
     """A potential association between two entities.
 
     A relationship is never an assertion of identity.  ``confidence_score`` is
@@ -17,61 +25,52 @@ class Relationship(IdMixin, TimestampMixin, Base):
     ``confidence_level`` is the band that score falls into.
     """
 
-    __tablename__ = "relationships"
-    __table_args__ = (
-        UniqueConstraint(
-            "investigation_id",
-            "source_entity_id",
-            "target_entity_id",
-            "relationship_type",
-            name="uq_relationship_identity",
-        ),
-        Index("ix_relationships_investigation", "investigation_id"),
-    )
+    investigation_id: str
+    source_entity_id: str
+    target_entity_id: str
+    relationship_type: str = RelationshipType.LINKS_TO
+    id: str = field(default_factory=new_id)
 
-    investigation_id: Mapped[str] = mapped_column(
-        String(32), ForeignKey("investigations.id", ondelete="CASCADE"), nullable=False
-    )
-    source_entity_id: Mapped[str] = mapped_column(
-        String(32), ForeignKey("entities.id", ondelete="CASCADE"), nullable=False
-    )
-    target_entity_id: Mapped[str] = mapped_column(
-        String(32), ForeignKey("entities.id", ondelete="CASCADE"), nullable=False
-    )
+    confidence_score: float = 0.0
+    confidence_level: str = ConfidenceLevel.LOW
+    analyst_status: str = AnalystStatus.UNREVIEWED
+    analyst_note: str | None = None
+    #: When the analyst last recorded a verdict (section 25).
+    reviewed_at: datetime | None = None
+    summary: str | None = None
 
-    relationship_type: Mapped[str] = mapped_column(
-        String(30), default=RelationshipType.LINKS_TO, nullable=False
-    )
-    confidence_score: Mapped[float] = mapped_column(Float, default=0.0, nullable=False)
-    confidence_level: Mapped[str] = mapped_column(
-        String(15), default=ConfidenceLevel.LOW, nullable=False
-    )
-    analyst_status: Mapped[str] = mapped_column(
-        String(15), default=AnalystStatus.UNREVIEWED, nullable=False
-    )
-    analyst_note: Mapped[str | None] = mapped_column(Text, nullable=True)
-    summary: Mapped[str | None] = mapped_column(Text, nullable=True)
+    created_at: datetime = field(default_factory=utcnow)
+    updated_at: datetime = field(default_factory=utcnow)
 
-    source_entity: Mapped["Entity"] = relationship(  # noqa: F821
-        foreign_keys=[source_entity_id]
-    )
-    target_entity: Mapped["Entity"] = relationship(  # noqa: F821
-        foreign_keys=[target_entity_id]
-    )
-    investigation: Mapped["Investigation"] = relationship(  # noqa: F821
-        back_populates="relationships"
-    )
-    evidence: Mapped[list["Evidence"]] = relationship(  # noqa: F821
-        back_populates="relationship",
-        cascade="all, delete-orphan",
-        passive_deletes=True,
-        order_by="Evidence.weight.desc()",
-    )
+    #: Populated on demand by the repository; not stored on the edge.
+    evidence: list["Evidence"] = field(default_factory=list)  # noqa: F821
+    source_entity: Any | None = None
+    target_entity: Any | None = None
 
     @property
     def evidence_ids(self) -> list[str]:
         """Ids of the evidence items backing this relationship."""
         return [item.id for item in self.evidence]
+
+    @classmethod
+    def from_edge(cls, edge: Any) -> "Relationship":
+        """Build a record from a Neo4j relationship."""
+        data = dict(edge)
+        return cls(
+            id=data["id"],
+            investigation_id=data["investigation_id"],
+            source_entity_id=data["source_entity_id"],
+            target_entity_id=data["target_entity_id"],
+            relationship_type=data.get("relationship_type", edge.type),
+            confidence_score=float(data.get("confidence_score", 0.0)),
+            confidence_level=data.get("confidence_level", ConfidenceLevel.LOW),
+            analyst_status=data.get("analyst_status", AnalystStatus.UNREVIEWED),
+            analyst_note=data.get("analyst_note"),
+            reviewed_at=as_datetime(data.get("reviewed_at")),
+            summary=data.get("summary"),
+            created_at=as_datetime(data.get("created_at")) or utcnow(),
+            updated_at=as_datetime(data.get("updated_at")) or utcnow(),
+        )
 
     def __repr__(self) -> str:  # pragma: no cover - debugging helper
         return (

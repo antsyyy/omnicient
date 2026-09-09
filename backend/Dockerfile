@@ -11,9 +11,11 @@ RUN pip install --no-cache-dir -r requirements.txt
 
 COPY app ./app
 
-# The SQLite file lives here; mount a volume to keep investigations between runs.
-ENV OMNICIENT_DATABASE_URL=sqlite:////data/omnicient.db
-VOLUME ["/data"]
+# State lives in Neo4j, so this image is stateless: no volume, and the
+# connection settings arrive from the environment at run time.
+ENV NEO4J_URI=bolt://neo4j:7687 \
+    NEO4J_USERNAME=neo4j \
+    NEO4J_DATABASE=neo4j
 
 EXPOSE 8000
 CMD ["uvicorn", "app.main:app", "--host", "0.0.0.0", "--port", "8000"]

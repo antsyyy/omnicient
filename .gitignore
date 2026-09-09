@@ -14,10 +14,11 @@ dist/
 *.tsbuildinfo
 
 # Local data and configuration
-backend/data/
-*.db
-*.sqlite3
 .env
+.env.local
+# Neo4j keeps its store under the compose volume, but a local tarball install
+# writes here.
+neo4j-data/
 
 # Editors / OS
 .DS_Store

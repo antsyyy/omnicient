@@ -123,11 +123,47 @@ class Settings:
     tagline: str = "Trace public identities. Follow the evidence."
     version: str = "0.1.0"
 
-    database_url: str = field(
-        default_factory=lambda: _env_str(
-            "OMNICIENT_DATABASE_URL",
-            f"sqlite:///{BACKEND_ROOT / 'data' / 'omnicient.db'}",
-        )
+    # Neo4j is the primary and only datastore.  Entities and relationships are
+    # native nodes and edges, so the graph the analyst reads is the graph the
+    # database stores - no object-relational translation in between.
+    neo4j_uri: str = field(
+        default_factory=lambda: _env_str("NEO4J_URI", "bolt://localhost:7687")
+    )
+    neo4j_username: str = field(
+        default_factory=lambda: _env_str("NEO4J_USERNAME", "neo4j")
+    )
+    neo4j_password: str = field(
+        default_factory=lambda: _env_str("NEO4J_PASSWORD", "")
+    )
+    #: Target database inside the DBMS.  Tests point this at a scratch database
+    #: so a run never touches investigation data.
+    neo4j_database: str = field(
+        default_factory=lambda: _env_str("NEO4J_DATABASE", "neo4j")
+    )
+    neo4j_max_connection_pool_size: int = field(
+        default_factory=lambda: _env_int("NEO4J_MAX_POOL_SIZE", 25)
+    )
+    #: Seconds to wait for the DBMS at startup.  Neo4j in Docker is usually
+    #: still recovering when the API container starts.
+    neo4j_startup_timeout: float = field(
+        default_factory=lambda: _env_float("NEO4J_STARTUP_TIMEOUT", 30.0)
+    )
+
+    # Path explorer bounds.  A graph query with no ceiling is a denial of
+    # service waiting to happen, so both limits are enforced server-side and
+    # the API clamps whatever a client asks for into these ranges.
+    path_max_depth: int = field(
+        default_factory=lambda: _env_int("OMNICIENT_PATH_MAX_DEPTH", 5)
+    )
+    path_max_paths: int = field(
+        default_factory=lambda: _env_int("OMNICIENT_PATH_MAX_PATHS", 5)
+    )
+    #: Hard ceiling a request may never exceed, whatever it asks for.
+    path_depth_ceiling: int = field(
+        default_factory=lambda: _env_int("OMNICIENT_PATH_DEPTH_CEILING", 8)
+    )
+    path_result_ceiling: int = field(
+        default_factory=lambda: _env_int("OMNICIENT_PATH_RESULT_CEILING", 25)
     )
 
     # Crawler budget (section 15 of the specification).

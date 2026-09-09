@@ -2,8 +2,8 @@
 
     uvicorn app.main:app --reload
 
-Creates the SQLite schema on startup, mounts every router under ``/api`` and
-publishes OpenAPI documentation at ``/docs``.
+Applies the Neo4j constraints and indexes on startup, mounts every router
+under ``/api`` and publishes OpenAPI documentation at ``/docs``.
 """
 
 from __future__ import annotations
@@ -16,7 +16,7 @@ from fastapi.responses import JSONResponse, RedirectResponse
 
 from .api import api_router
 from .config import get_settings
-from .database import init_db
+from .database import DatabaseUnavailableError, close_driver, init_db
 from .utils.logging import configure_logging, get_logger
 from .utils.normalization import NormalizationError
 from .utils.validation import UnsafeURLError
@@ -42,12 +42,23 @@ authenticate, reuse sessions, bypass CAPTCHAs or evade rate limits.
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
-    """Create the database schema before serving traffic."""
-    init_db()
+    """Connect to Neo4j and apply constraints before serving traffic.
+
+    A database that is still starting is retried; one that never answers is
+    logged and the API still comes up, so ``/api/health`` can report the
+    problem instead of the process dying at boot.
+    """
+    try:
+        init_db()
+    except DatabaseUnavailableError as exc:
+        logger.error("startup_without_database error=%s", exc)
     logger.info(
         "omnicient_started version=%s demo_mode=%s", settings.version, settings.demo_mode
     )
-    yield
+    try:
+        yield
+    finally:
+        close_driver()
 
 
 app = FastAPI(
@@ -79,6 +90,18 @@ async def _normalization_error(request: Request, exc: NormalizationError) -> JSO
 async def _unsafe_url_error(request: Request, exc: UnsafeURLError) -> JSONResponse:
     """A URL rejected by the SSRF guard is reported, never fetched."""
     return JSONResponse(status_code=400, content={"detail": str(exc)})
+
+
+@app.exception_handler(DatabaseUnavailableError)
+async def _database_unavailable(
+    request: Request, exc: DatabaseUnavailableError
+) -> JSONResponse:
+    """Neo4j being down is a 503, and the message never leaks driver internals."""
+    logger.error("database_unavailable path=%s", request.url.path)
+    return JSONResponse(
+        status_code=503,
+        content={"detail": "The investigation database is unavailable."},
+    )
 
 
 @app.get("/", include_in_schema=False)

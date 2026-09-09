@@ -15,7 +15,7 @@ filterwarnings = [
 [tool.ruff]
 line-length = 100
 target-version = "py312"
-exclude = [".venv", "data"]
+exclude = [".venv"]
 
 [tool.ruff.lint]
 select = ["E", "F", "W", "I", "B", "UP", "C4", "SIM"]
@@ -26,6 +26,6 @@ ignore = [
 
 [tool.ruff.lint.per-file-ignores]
 "tests/*" = ["E501"]
-# SQLAlchemy resolves relationship targets from quoted forward references at
-# mapper-configuration time; unquoting them breaks cross-module models.
+# The records use quoted forward references for types defined in sibling
+# modules, which keeps the import graph between them acyclic.
 "app/models/*" = ["UP037"]

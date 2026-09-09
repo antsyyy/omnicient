@@ -9,7 +9,7 @@ from pydantic import BaseModel, ConfigDict, Field, field_validator
 
 from ..models.enums import InvestigationStatus
 from ..utils.normalization import normalize_platform
-from .entity import EntityRead
+from .entity import EntityRead, SnapshotRead
 from .evidence import EvidenceRead
 from .relationship import RelationshipRead
 
@@ -20,9 +20,19 @@ class InvestigationCreate(BaseModel):
     identifier: str = Field(
         min_length=1,
         max_length=2048,
-        description="Seed username, @handle or profile URL, e.g. @alice_98.",
+        description=(
+            "The only required input: a username, email address, profile URL "
+            "or domain. The identifier type is detected automatically."
+        ),
     )
-    platform: str = Field(default="instagram", max_length=50)
+    platform: str | None = Field(
+        default=None,
+        max_length=50,
+        description=(
+            "Optional override. Leave unset - the normal case - and Omnicient "
+            "detects the identifier type and searches every supported source."
+        ),
+    )
     name: str | None = Field(default=None, max_length=200)
     demo: bool | None = Field(
         default=None,
@@ -40,10 +50,13 @@ class InvestigationCreate(BaseModel):
 
     @field_validator("platform")
     @classmethod
-    def _normalize_platform(cls, value: str) -> str:
+    def _normalize_platform(cls, value: str | None) -> str | None:
+        """An explicit platform is normalized; omitting it is the default."""
+        if value is None or not value.strip():
+            return None
         normalized = normalize_platform(value)
         if not normalized:
-            raise ValueError("platform is required")
+            raise ValueError(f"unknown platform: {value!r}")
         return normalized
 
 
@@ -56,6 +69,9 @@ class InvestigationRead(BaseModel):
     name: str
     seed_platform: str
     seed_identifier: str
+    #: What the analyst typed, and what it was detected as (section 8).
+    seed_input: str = ""
+    seed_type: str = ""
     status: InvestigationStatus
     status_message: str | None = None
     demo: bool = False
@@ -76,13 +92,16 @@ class CrawlEventRead(BaseModel):
 
     model_config = ConfigDict(from_attributes=True)
 
-    id: int
+    id: str
     investigation_id: str
     timestamp: datetime
     level: str
     event: str
     message: str
     data: dict[str, Any] | None = None
+    #: Monotonic position in the timeline, so a client can order events that
+    #: share a timestamp.
+    sequence: int = 0
 
 
 class SourceIssue(BaseModel):
@@ -145,4 +164,5 @@ class InvestigationExport(BaseModel):
     entities: list[EntityRead] = Field(default_factory=list)
     relationships: list[RelationshipRead] = Field(default_factory=list)
     evidence: list[EvidenceRead] = Field(default_factory=list)
+    snapshots: list[SnapshotRead] = Field(default_factory=list)
     crawl_events: list[CrawlEventRead] = Field(default_factory=list)

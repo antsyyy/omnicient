@@ -1,28 +1,66 @@
 # Omnicient — evidence-backed OSINT crawling and identity correlation.
 #
+#   cp .env.example .env      # set NEO4J_PASSWORD
 #   docker compose up --build
-#   interface: http://localhost:5173
-#   API docs:  http://localhost:8000/docs
+#
+#   interface:    http://localhost:5173
+#   API docs:     http://localhost:8000/docs
+#   Neo4j browser http://localhost:7474
 #
 # Demo mode is on by default, so the stack runs with no network access to any
-# external service.
+# external service.  Credentials are never hardcoded: NEO4J_PASSWORD comes from
+# the environment (or a .env file next to this one) and compose refuses to
+# start without it.
 
 services:
+  neo4j:
+    image: neo4j:5.26-community
+    environment:
+      # The image reads the initial credentials from NEO4J_AUTH.  Nothing
+      # else NEO4J_-prefixed may be invented here: the image maps those names
+      # onto neo4j.conf settings and rejects ones it does not recognize.
+      NEO4J_AUTH: "neo4j/${NEO4J_PASSWORD:?set NEO4J_PASSWORD in .env}"
+      NEO4J_server_memory_heap_initial__size: "512m"
+      NEO4J_server_memory_heap_max__size: "1G"
+      NEO4J_server_memory_pagecache_size: "512m"
+    ports:
+      - "7474:7474"   # HTTP browser
+      - "7687:7687"   # Bolt
+    volumes:
+      - neo4j-data:/data
+      - neo4j-logs:/logs
+    healthcheck:
+      # Proves Bolt is actually answering queries, not just that the port is
+      # open — the API's first statement is a schema write.
+      test:
+        [
+          "CMD-SHELL",
+          "cypher-shell -u neo4j -p \"$${NEO4J_AUTH#neo4j/}\" 'RETURN 1' || exit 1",
+        ]
+      interval: 10s
+      timeout: 10s
+      retries: 12
+      start_period: 40s
+
   backend:
     build: ./backend
     environment:
+      NEO4J_URI: "bolt://neo4j:7687"
+      NEO4J_USERNAME: "neo4j"
+      NEO4J_PASSWORD: "${NEO4J_PASSWORD:?set NEO4J_PASSWORD in .env}"
+      NEO4J_DATABASE: "neo4j"
       # Demo mode uses the built-in synthetic dataset. Set to false to query
       # live public sources.
       OMNICIENT_DEMO_MODE: "true"
-      OMNICIENT_DATABASE_URL: "sqlite:////data/omnicient.db"
       OMNICIENT_MAX_DEPTH: "2"
       OMNICIENT_MAX_PAGES: "50"
       OMNICIENT_REQUEST_DELAY: "1.0"
       OMNICIENT_CORS_ORIGINS: "http://localhost:5173,http://127.0.0.1:5173"
-    volumes:
-      - omnicient-data:/data
     ports:
       - "8000:8000"
+    depends_on:
+      neo4j:
+        condition: service_healthy
     healthcheck:
       test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://127.0.0.1:8000/api/health')"]
       interval: 10s
@@ -40,4 +78,5 @@ services:
         condition: service_healthy
 
 volumes:
-  omnicient-data:
+  neo4j-data:
+  neo4j-logs:

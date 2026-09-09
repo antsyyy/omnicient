@@ -1,89 +1,97 @@
-"""Investigation and crawl-event tables."""
+"""Investigation and crawl-event records."""
 
 from __future__ import annotations
 
+from dataclasses import dataclass, field
 from datetime import datetime
 from typing import Any
 
-from sqlalchemy import JSON, DateTime, ForeignKey, Index, Integer, String, Text
-from sqlalchemy.orm import Mapped, mapped_column, relationship
-
-from .base import Base, IdMixin, TimestampMixin, utcnow
+from .base import as_datetime, new_id, utcnow
+from .entity import _json_field
 from .enums import InvestigationStatus
 
 
-class Investigation(IdMixin, TimestampMixin, Base):
+@dataclass
+class Investigation:
     """One analyst investigation, rooted at a single public seed identifier."""
 
-    __tablename__ = "investigations"
-
-    name: Mapped[str] = mapped_column(String(200), nullable=False)
-    seed_platform: Mapped[str] = mapped_column(String(50), nullable=False)
-    seed_identifier: Mapped[str] = mapped_column(String(200), nullable=False)
-    status: Mapped[str] = mapped_column(
-        String(20), default=InvestigationStatus.CREATED, nullable=False
-    )
-    status_message: Mapped[str | None] = mapped_column(Text, nullable=True)
-    demo: Mapped[bool] = mapped_column(default=False, nullable=False)
-    max_depth: Mapped[int] = mapped_column(Integer, default=2, nullable=False)
-    max_pages: Mapped[int] = mapped_column(Integer, default=50, nullable=False)
-    started_at: Mapped[datetime | None] = mapped_column(
-        DateTime(timezone=True), nullable=True
-    )
-    completed_at: Mapped[datetime | None] = mapped_column(
-        DateTime(timezone=True), nullable=True
-    )
-
-    entities: Mapped[list["Entity"]] = relationship(  # noqa: F821
-        back_populates="investigation",
-        cascade="all, delete-orphan",
-        passive_deletes=True,
-    )
-    relationships: Mapped[list["Relationship"]] = relationship(  # noqa: F821
-        back_populates="investigation",
-        cascade="all, delete-orphan",
-        passive_deletes=True,
-    )
-    evidence: Mapped[list["Evidence"]] = relationship(  # noqa: F821
-        back_populates="investigation",
-        cascade="all, delete-orphan",
-        passive_deletes=True,
-    )
-    events: Mapped[list["CrawlEvent"]] = relationship(
-        back_populates="investigation",
-        cascade="all, delete-orphan",
-        passive_deletes=True,
-        order_by="CrawlEvent.timestamp",
-    )
+    name: str
+    seed_platform: str
+    seed_identifier: str
+    id: str = field(default_factory=new_id)
+    #: Exactly what the analyst typed, before normalization.
+    seed_input: str = ""
+    #: The detected :class:`~app.utils.identifier.IdentifierType`.
+    seed_type: str = ""
+    status: str = InvestigationStatus.CREATED
+    status_message: str | None = None
+    demo: bool = False
+    max_depth: int = 2
+    max_pages: int = 50
+    started_at: datetime | None = None
+    completed_at: datetime | None = None
+    created_at: datetime = field(default_factory=utcnow)
+    updated_at: datetime = field(default_factory=utcnow)
 
     @property
     def seed_label(self) -> str:
         """``instagram:alice_98`` - the form used in logs and event lines."""
         return f"{self.seed_platform}:{self.seed_identifier}"
 
+    @classmethod
+    def from_node(cls, node: Any) -> "Investigation":
+        """Build a record from a Neo4j node."""
+        data = dict(node)
+        return cls(
+            id=data["id"],
+            name=data.get("name", ""),
+            seed_platform=data.get("seed_platform", ""),
+            seed_identifier=data.get("seed_identifier", ""),
+            seed_input=data.get("seed_input", ""),
+            seed_type=data.get("seed_type", ""),
+            status=data.get("status", InvestigationStatus.CREATED),
+            status_message=data.get("status_message"),
+            demo=bool(data.get("demo", False)),
+            max_depth=int(data.get("max_depth", 2)),
+            max_pages=int(data.get("max_pages", 50)),
+            started_at=as_datetime(data.get("started_at")),
+            completed_at=as_datetime(data.get("completed_at")),
+            created_at=as_datetime(data.get("created_at")) or utcnow(),
+            updated_at=as_datetime(data.get("updated_at")) or utcnow(),
+        )
 
-class CrawlEvent(Base):
+
+@dataclass
+class CrawlEvent:
     """A timestamped line in the investigation's activity timeline.
 
     Events mirror the structured log so an analyst can see exactly what the
     crawler did, including sources that failed and why.
     """
 
-    __tablename__ = "crawl_events"
+    investigation_id: str
+    event: str
+    message: str
+    id: str = field(default_factory=new_id)
+    timestamp: datetime = field(default_factory=utcnow)
+    level: str = "INFO"
+    data: dict[str, Any] | None = None
+    #: Monotonic position within the investigation, so events written inside
+    #: the same millisecond still read back in the order they happened.
+    sequence: int = 0
 
-    id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
-    investigation_id: Mapped[str] = mapped_column(
-        String(32), ForeignKey("investigations.id", ondelete="CASCADE"), nullable=False
-    )
-    timestamp: Mapped[datetime] = mapped_column(
-        DateTime(timezone=True), default=utcnow, nullable=False
-    )
-    level: Mapped[str] = mapped_column(String(10), default="INFO", nullable=False)
-    event: Mapped[str] = mapped_column(String(80), nullable=False)
-    message: Mapped[str] = mapped_column(Text, nullable=False)
-    data: Mapped[dict[str, Any] | None] = mapped_column(JSON, nullable=True)
-
-    investigation: Mapped[Investigation] = relationship(back_populates="events")
-
-
-Index("ix_crawl_events_investigation", CrawlEvent.investigation_id, CrawlEvent.timestamp)
+    @classmethod
+    def from_node(cls, node: Any) -> "CrawlEvent":
+        """Build a record from a Neo4j node."""
+        data = dict(node)
+        raw = data.get("data")
+        return cls(
+            id=data["id"],
+            investigation_id=data["investigation_id"],
+            event=data.get("event", ""),
+            message=data.get("message", ""),
+            timestamp=as_datetime(data.get("timestamp")) or utcnow(),
+            level=data.get("level", "INFO"),
+            data=_json_field(raw) if raw else None,
+            sequence=int(data.get("sequence", 0)),
+        )
