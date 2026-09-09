@@ -17,6 +17,7 @@ that provenance is what separates "the profile links to this account" from
 
 from __future__ import annotations
 
+from collections.abc import Iterable
 from dataclasses import dataclass, field
 
 from ..models.enums import DiscoveryMethod, EntityType
@@ -50,6 +51,14 @@ class Candidate:
     link_context: str | None = None
     #: Human-readable name, when it differs from the canonical identifier.
     display_name: str | None = None
+    #: True for candidates that are guesses rather than observations.  When a
+    #: guess does not resolve it leaves no node behind, so a handle that simply
+    #: does not exist on a platform never becomes graph noise.
+    drop_if_unresolved: bool = False
+    #: True when this candidate stands in for the seed.  A bare handle seeds a
+    #: ``(:Username)`` pivot with no profile of its own, so the accounts found
+    #: for it are what handle-variant expansion has to work from.
+    seed_equivalent: bool = False
 
     @property
     def key(self) -> EntityKey:
@@ -75,7 +84,14 @@ SEED_ENTITY_TYPES: dict[str, EntityType] = {
     "website": EntityType.WEBSITE,
     "domain": EntityType.DOMAIN,
     "email": EntityType.EMAIL,
+    "username": EntityType.USERNAME,
+    "organization": EntityType.ORGANIZATION,
 }
+
+#: Platforms that are pivots rather than something an adapter fetches.
+PSEUDO_PLATFORMS: frozenset[str] = frozenset(
+    {"username", "email", "domain", "organization"}
+)
 
 
 def seed_candidate(platform: str, identifier: str) -> Candidate:
@@ -87,7 +103,53 @@ def seed_candidate(platform: str, identifier: str) -> Candidate:
         method=DiscoveryMethod.SEED,
         reason="Seed identifier supplied by the analyst",
         depth=0,
+        seed_equivalent=True,
     )
+
+
+def discover_sources(
+    identifier: str,
+    *,
+    platforms: Iterable[str],
+    parent_key: EntityKey,
+    depth: int = 0,
+) -> list[Candidate]:
+    """Search candidates for a bare handle, one per supported account source.
+
+    This is what lets an analyst type ``alice_98`` and nothing else (section
+    3.2).  Every supported source is *asked*; none is assumed to hold the
+    handle.  A source that returns nothing leaves no node behind, so the graph
+    shows the platforms where the handle actually exists.
+
+    The candidates sit at the same depth as the seed: querying a second
+    platform for the same handle is not a hop of evidence, it is the same
+    question asked elsewhere.
+    """
+    candidates: list[Candidate] = []
+    for platform in platforms:
+        if platform in PSEUDO_PLATFORMS or platform == "website":
+            continue
+        candidates.append(
+            Candidate(
+                entity_type=EntityType.ACCOUNT,
+                platform=platform,
+                identifier=identifier,
+                method=DiscoveryMethod.DIRECT,
+                reason=(
+                    f"{platform} searched for the seed handle '{identifier}' "
+                    f"(no platform was specified by the analyst)"
+                ),
+                depth=depth,
+                parent_key=parent_key,
+                link_context=identifier,
+                drop_if_unresolved=True,
+                seed_equivalent=True,
+            )
+        )
+    logger.info(
+        "sources_discovered identifier=%s platforms=%d", identifier, len(candidates)
+    )
+    return candidates
 
 
 def candidates_from_profile(
@@ -215,6 +277,7 @@ def similarity_candidates(
                         f"'{profile.identifier}' - a weak lead, not evidence"
                     ),
                     depth=depth,
+                    drop_if_unresolved=True,
                 )
             )
     return candidates

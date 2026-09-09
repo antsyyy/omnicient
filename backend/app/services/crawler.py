@@ -26,6 +26,7 @@ from .discovery import (
     Candidate,
     EntityKey,
     candidates_from_profile,
+    discover_sources,
     email_domain_candidate,
     seed_candidate,
     similarity_candidates,
@@ -143,8 +144,33 @@ class Crawler:
             seed=seed.label, max_depth=max_depth, max_pages=max_pages,
         )
 
-        queue: deque[Candidate] = deque([seed])
+        queue: deque[Candidate] = deque()
         queued: set[EntityKey] = {seed.key}
+
+        if seed.platform == "username":
+            # No platform was specified, so the seed is the handle itself and
+            # every supported source is asked about it (sections 3.2 and 12).
+            self._record_entity(outcome, seed, profile=None, resolved=True)
+            sources = discover_sources(
+                seed.identifier,
+                platforms=self.registry.platforms(),
+                parent_key=seed.key,
+            )
+            self._record(
+                outcome,
+                "sources_discovered",
+                (
+                    f"Searching {len(sources)} supported sources for the handle "
+                    f"'{seed.identifier}'"
+                ),
+                identifier=seed.identifier,
+                platforms=[candidate.platform for candidate in sources],
+            )
+            for candidate in sources:
+                queued.add(candidate.key)
+                queue.append(candidate)
+        else:
+            queue.append(seed)
 
         while queue:
             candidate = queue.popleft()
@@ -172,7 +198,7 @@ class Crawler:
                 depth=candidate.depth + 1,
                 from_seed=entity.is_seed,
             )
-            if include_similarity and entity.is_seed:
+            if include_similarity and candidate.seed_equivalent:
                 derived.extend(
                     similarity_candidates(
                         profile,
@@ -216,7 +242,7 @@ class Crawler:
         if adapter is None:
             # Discovery is allowed to outrun adapter coverage: the account is
             # recorded as an unresolved candidate node (section 14).
-            if candidate.method is DiscoveryMethod.SIMILARITY:
+            if candidate.drop_if_unresolved:
                 return None, None
             entity = self._record_entity(outcome, candidate, profile=None)
             self._record(
@@ -251,7 +277,7 @@ class Crawler:
                 level="WARNING" if result.reason != FailureReason.NOT_FOUND else "INFO",
                 platform=candidate.platform, reason=str(result.reason),
             )
-            if candidate.method is DiscoveryMethod.SIMILARITY:
+            if candidate.drop_if_unresolved:
                 return None, None
             entity = self._record_entity(outcome, candidate, profile=None)
             self._link(outcome, candidate)
@@ -265,7 +291,7 @@ class Crawler:
                 f"No public profile found for {candidate.label}",
                 platform=candidate.platform, identifier=candidate.identifier,
             )
-            if candidate.method is DiscoveryMethod.SIMILARITY:
+            if candidate.drop_if_unresolved:
                 return None, None
             entity = self._record_entity(outcome, candidate, profile=None)
             self._link(outcome, candidate)
@@ -301,6 +327,7 @@ class Crawler:
         outcome: CrawlOutcome,
         candidate: Candidate,
         profile: ObservedProfile | None,
+        resolved: bool | None = None,
     ) -> ObservedEntity:
         """Create or update the entity for a candidate."""
         existing = outcome.entities.get(candidate.key)
@@ -331,7 +358,7 @@ class Crawler:
             method=candidate.method,
             depth=candidate.depth,
             discovered_via=candidate.reason,
-            resolved=profile is not None,
+            resolved=(profile is not None) if resolved is None else resolved,
             is_seed=candidate.method is DiscoveryMethod.SEED,
         )
         outcome.entities[entity.key] = entity

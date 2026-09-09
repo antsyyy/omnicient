@@ -154,7 +154,13 @@ def resolve_public_host(host: str, port: int = 443) -> list[str]:
 
 
 def validate_seed_identifier(value: str) -> str:
-    """Validate an analyst-supplied seed identifier, returning it normalized."""
+    """Validate a seed that is already known to be a handle.
+
+    Investigation creation does **not** use this: it calls
+    :func:`app.utils.identifier.detect_identifier`, which classifies the input
+    first and so accepts email addresses, URLs and domains as well.  This
+    remains for callers that specifically want handle validation.
+    """
     from .normalization import normalize_username
 
     if value is None or not str(value).strip():

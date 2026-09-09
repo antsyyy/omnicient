@@ -2,7 +2,12 @@ import { useCallback, useEffect, useState } from 'react'
 import { Link, useNavigate } from 'react-router-dom'
 import { api } from '../api/client'
 import SearchBar from '../components/SearchBar'
-import type { Health, Investigation } from '../types'
+import type {
+  GlobalStats,
+  Health,
+  Investigation,
+  NewInvestigationInput,
+} from '../types'
 import { formatDay } from '../lib/display'
 
 const STATUS_TONE: Record<string, string> = {
@@ -13,28 +18,53 @@ const STATUS_TONE: Record<string, string> = {
   CREATED: 'text-faint',
 }
 
+function Stat({
+  label,
+  value,
+  tone,
+}: {
+  label: string
+  value: number | undefined
+  tone?: string
+}) {
+  return (
+    <div className="rounded border border-line bg-panel px-3 py-2">
+      <div className="panel-title">{label}</div>
+      <div
+        className="font-mono text-[22px] leading-tight"
+        style={{ color: tone ?? 'var(--color-ink)' }}
+      >
+        {value ?? '—'}
+      </div>
+    </div>
+  )
+}
+
 /** Case list and investigation creation. */
 export default function Dashboard() {
   const navigate = useNavigate()
   const [health, setHealth] = useState<Health | null>(null)
   const [investigations, setInvestigations] = useState<Investigation[]>([])
+  const [stats, setStats] = useState<GlobalStats | null>(null)
   const [error, setError] = useState<string | null>(null)
   const [busy, setBusy] = useState(false)
 
   const refresh = useCallback(async () => {
-    const [status, cases] = await Promise.all([
+    const [status, cases, totals] = await Promise.all([
       api.health(),
       api.listInvestigations(),
+      api.stats(),
     ])
     setHealth(status)
     setInvestigations(cases)
+    setStats(totals)
   }, [])
 
   useEffect(() => {
     refresh().catch((cause: Error) => setError(cause.message))
   }, [refresh])
 
-  async function start(input: { identifier: string; platform: string; demo: boolean }) {
+  async function start(input: NewInvestigationInput) {
     setBusy(true)
     setError(null)
     try {
@@ -72,8 +102,27 @@ export default function Dashboard() {
             </span>
           </div>
           <div>sources: {health?.sources.join(', ') ?? '—'}</div>
+          {health && !health.crawler.respect_robots && (
+            <div
+              className="text-band-medium"
+              title="robots.txt is not consulted. Instagram, Facebook and Threads publish Disallow: / — reaching them is an operator decision, and their terms of service apply independently."
+            >
+              robots: <span className="text-rejected">ignored</span>
+            </div>
+          )}
         </div>
       </header>
+
+      <section className="grid grid-cols-2 gap-3 sm:grid-cols-4">
+        <Stat label="Investigations" value={stats?.investigations} />
+        <Stat label="Entities discovered" value={stats?.entities} />
+        <Stat label="Relationships" value={stats?.relationships} />
+        <Stat
+          label="Confirmed associations"
+          value={stats?.confirmed}
+          tone="var(--color-confirmed)"
+        />
+      </section>
 
       <section className="rounded border border-line bg-panel p-4">
         <h2 className="panel-title mb-3">New investigation</h2>
