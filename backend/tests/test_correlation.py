@@ -216,3 +216,30 @@ def test_demo_dataset_produces_the_documented_scenario() -> None:
     )
     assert contradictory.relationship_type == RelationshipType.CONTRADICTORY
     assert len(contradictory.contradicting) == 2
+
+
+def test_a_shared_link_shortener_is_not_a_shared_website() -> None:
+    """Half the internet links to linktr.ee; that ties nobody to anybody.
+
+    Crediting a generic host as a shared website is an easy way to manufacture
+    a false positive, so those hosts earn nothing.
+    """
+    engine = CorrelationEngine()
+    a = profile("instagram", "alice_98", external_links=["https://linktr.ee/alice"])
+    b = profile("threads", "bob_x", external_links=["https://linktr.ee/bob"])
+
+    result = engine.compare(a, b)
+    types = {item.type for item in (result.evidence if result else [])}
+    assert EvidenceType.SAME_WEBSITE not in types
+
+
+def test_a_shared_personal_domain_is_still_strong_evidence() -> None:
+    """The filter must not weaken the signal it exists to protect."""
+    engine = CorrelationEngine()
+    a = profile("instagram", "alice_98", external_links=["https://alice.dev"])
+    b = profile("threads", "alice_dev", external_links=["https://alice.dev"])
+
+    result = engine.compare(a, b)
+    assert result is not None
+    types = {item.type for item in result.evidence}
+    assert EvidenceType.SAME_WEBSITE in types

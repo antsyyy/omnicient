@@ -72,8 +72,11 @@ export default function RelationshipPanel({
   }
 
   const color = CONFIDENCE_COLOR[detail.confidence_level]
-  const supporting = detail.evidence.filter((item) => item.supports)
-  const contradicting = detail.evidence.filter((item) => !item.supports)
+  const supporting = detail.evidence.filter((item) => item.stance === 'SUPPORTING')
+  const contradicting = detail.evidence.filter(
+    (item) => item.stance === 'CONTRADICTORY',
+  )
+  const neutral = detail.evidence.filter((item) => item.stance === 'NEUTRAL')
 
   return (
     <div className="flex h-full flex-col">
@@ -145,7 +148,14 @@ export default function RelationshipPanel({
           <p className="text-[12px] leading-snug text-dim">{detail.summary}</p>
         )}
 
-        <EvidencePanel supporting={supporting} contradicting={contradicting} />
+        <EvidencePanel
+          supporting={supporting}
+          contradicting={contradicting}
+          neutral={neutral}
+          sourceEntity={detail.source_entity}
+          targetEntity={detail.target_entity}
+          onSelectEntity={onSelectEntity}
+        />
 
         <section className="space-y-2 border-t border-line pt-3">
           <div className="panel-title">Analyst decision</div>

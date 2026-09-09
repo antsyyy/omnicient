@@ -30,6 +30,7 @@ from ..models.enums import (
 from ..sources.base import ObservedProfile
 from ..utils.logging import get_logger
 from ..utils.normalization import (
+    is_identifying_host,
     normalize_display_name,
     normalize_location,
     normalize_url,
@@ -58,6 +59,10 @@ class EvidenceItem:
     supports: bool = True
     source_url: str | None = None
     extracted_value: str | None = None
+    #: The comparison form that actually matched, when it differs from the
+    #: published value ("Alice R." -> "alice r", "https://alice.dev/" ->
+    #: "alice.dev").  This is what makes a match explainable.
+    normalized_value: str | None = None
 
     @property
     def signed_weight(self) -> float:
@@ -301,6 +306,7 @@ class CorrelationEngine:
             weight=self.scoring.shared_email,
             source_url=source.url,
             extracted_value=shared[0],
+            normalized_value=shared[0].lower(),
         )
 
     def _shared_avatar(
@@ -322,7 +328,8 @@ class CorrelationEngine:
             description=f"Both profiles use the same public avatar image: {first}",
             weight=self.scoring.shared_avatar,
             source_url=first,
-            extracted_value=first,
+            extracted_value=source.avatar_url,
+            normalized_value=first,
         )
 
     @staticmethod
@@ -331,8 +338,12 @@ class CorrelationEngine:
         sites: dict[str, str] = {}
         for url in profile.websites or profile.external_links:
             identity = website_identity(url)
-            if identity and identity not in sites:
-                sites[identity] = url
+            if not identity or identity in sites:
+                continue
+            # A shortener or mailbox provider is not a shared identity.
+            if not is_identifying_host(identity):
+                continue
+            sites[identity] = url
         return sites
 
     def _shared_website(
@@ -350,7 +361,8 @@ class CorrelationEngine:
             ),
             weight=self.scoring.shared_website,
             source_url=first[shared[0]],
-            extracted_value=shared[0],
+            extracted_value=first[shared[0]],
+            normalized_value=shared[0],
         )
 
     def _similar_bio(
@@ -418,6 +430,7 @@ class CorrelationEngine:
             weight=self.scoring.same_display_name,
             source_url=target.url,
             extracted_value=target.display_name,
+            normalized_value=normalize_display_name(target.display_name),
         )
 
     def _shared_organization(
@@ -433,7 +446,11 @@ class CorrelationEngine:
             description=f"Both profiles reference the organization '{shared[0]}'",
             weight=self.scoring.shared_organization,
             source_url=target.url,
-            extracted_value=shared[0],
+            extracted_value=next(
+                (name for name in target.organizations if name.lower() == shared[0]),
+                shared[0],
+            ),
+            normalized_value=shared[0],
         )
 
     # -- contradictions ----------------------------------------------------

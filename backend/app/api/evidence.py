@@ -8,12 +8,9 @@ that produced its score.
 from __future__ import annotations
 
 from fastapi import APIRouter, Depends, HTTPException
-from sqlalchemy import select
-from sqlalchemy.orm import Session
 
-from ..database import get_db
-from ..models.evidence import Evidence
-from ..models.relationship import Relationship
+from ..database import get_repository
+from ..repository import Neo4jRepository
 from ..schemas.evidence import EvidenceBundle, EvidenceRead
 
 router = APIRouter(tags=["evidence"])
@@ -25,17 +22,23 @@ router = APIRouter(tags=["evidence"])
     summary="Evidence behind a relationship",
 )
 def relationship_evidence(
-    relationship_id: str, db: Session = Depends(get_db)
+    relationship_id: str, repo: Neo4jRepository = Depends(get_repository)
 ) -> EvidenceBundle:
     """Supporting and contradicting evidence, separated for display."""
-    relationship = db.get(Relationship, relationship_id)
-    if relationship is None:
+    if repo.get_relationship(relationship_id) is None:
         raise HTTPException(status_code=404, detail="Relationship not found")
-    items = [EvidenceRead.model_validate(item) for item in relationship.evidence]
+    items = [
+        EvidenceRead.model_validate(item)
+        for item in repo.evidence_for_relationship(relationship_id)
+    ]
     return EvidenceBundle(
         relationship_id=relationship_id,
-        supporting=[item for item in items if item.supports],
-        contradicting=[item for item in items if not item.supports],
+        supporting=[item for item in items if item.stance == "SUPPORTING"],
+        contradicting=[item for item in items if item.stance == "CONTRADICTORY"],
+        # Observed and recorded, but it moved the score by nothing. Shown
+        # rather than dropped: "we looked and it changed nothing" is itself
+        # a finding an analyst may want.
+        neutral=[item for item in items if item.stance == "NEUTRAL"],
     )
 
 
@@ -44,9 +47,11 @@ def relationship_evidence(
     response_model=EvidenceRead,
     summary="Read one evidence item",
 )
-def read_evidence(evidence_id: str, db: Session = Depends(get_db)) -> EvidenceRead:
+def read_evidence(
+    evidence_id: str, repo: Neo4jRepository = Depends(get_repository)
+) -> EvidenceRead:
     """A single observation, with the URL it was collected from."""
-    item = db.get(Evidence, evidence_id)
+    item = repo.get_evidence(evidence_id)
     if item is None:
         raise HTTPException(status_code=404, detail="Evidence not found")
     return EvidenceRead.model_validate(item)
@@ -58,12 +63,10 @@ def read_evidence(evidence_id: str, db: Session = Depends(get_db)) -> EvidenceRe
     summary="All evidence for an investigation",
 )
 def investigation_evidence(
-    investigation_id: str, db: Session = Depends(get_db)
+    investigation_id: str, repo: Neo4jRepository = Depends(get_repository)
 ) -> list[EvidenceRead]:
     """Every observation collected during an investigation, oldest first."""
-    items = db.scalars(
-        select(Evidence)
-        .where(Evidence.investigation_id == investigation_id)
-        .order_by(Evidence.collected_at)
-    )
-    return [EvidenceRead.model_validate(item) for item in items]
+    return [
+        EvidenceRead.model_validate(item)
+        for item in repo.list_evidence(investigation_id)
+    ]
