@@ -33,6 +33,8 @@ observation contributed, and the contradictions that argue against them.
 - [Environment variables](#environment-variables)
 - [Demo mode](#demo-mode)
 - [API documentation](#api-documentation)
+- [Identifier detection](#identifier-detection)
+- [Analysis layer](#analysis-layer)
 - [Correlation methodology](#correlation-methodology)
 - [Confidence scoring](#confidence-scoring)
 - [Crawler behaviour and limitations](#crawler-behaviour-and-limitations)
@@ -83,12 +85,22 @@ DISCOVERY → ENTITY EXTRACTION → CANDIDATE GENERATION
 
 **Investigation**
 
-- Create an investigation from a username, `@handle` or profile URL
+- Create an investigation from **one** input — username, email address,
+  profile URL or domain — with **no platform to choose**: the identifier type
+  is detected and every source that can answer is searched
 - Controlled breadth-first crawl of permitted public sources
 - Entity extraction, candidate generation and correlation in one run
 - Persisted timeline of every crawl event, including source failures
 - Re-runnable discovery that preserves analyst decisions
-- Full JSON export
+- JSON and CSV export, including analyst decisions and snapshots
+- **Identity Intelligence Profile** — an evidence-backed summary of everything
+  observed, computed from the graph rather than stored beside it
+- **Alias detection** — named, deterministic handle transformations, resistant
+  to the `alex`/`alexander` class of false positive
+- **Relationship path explorer** — bounded Cypher traversal answering "how are
+  these two connected?", ranked deterministically and highlighted in the graph
+- **Investigation leads** — deterministic pivots derived from stored evidence,
+  banded HIGH / MEDIUM / LOW
 
 **Evidence and correlation**
 
@@ -109,9 +121,12 @@ DISCOVERY → ENTITY EXTRACTION → CANDIDATE GENERATION
 
 **Sources**
 
-- Instagram, Threads, Facebook and website adapters
-- Platform-aware URL parsing for GitHub, Reddit, X, LinkedIn, YouTube and
-  Mastodon — discovered as candidate entities before adapters exist for them
+- **Six sources that work live**, chosen because their robots.txt permits
+  anonymous lookups: GitHub, Keybase, Mastodon, Bluesky, DEV and websites
+- Instagram, Reddit, Threads and Facebook adapters, which report their refusal
+  rather than working around it
+- Platform-aware URL parsing for X, LinkedIn, YouTube and Hacker News —
+  discovered as candidate entities before adapters exist for them
 - Adapter interface designed so a new platform is one new class
 
 ---
@@ -125,8 +140,8 @@ flowchart TD
     CR["Crawler Service<br/>breadth-first, budgeted"]
     CO["Correlation Engine<br/>rule-based scoring"]
     GR["Graph Service<br/>NetworkX layout + stats"]
-    DB[("SQLite<br/>via SQLAlchemy")]
-    SRC["Source Adapters<br/>Instagram · Threads · Facebook · Website"]
+    DB[("Neo4j<br/>native property graph")]
+    SRC["Source Adapters<br/>GitHub · Keybase · Mastodon · Bluesky · DEV · Website<br/>(+ Instagram · Reddit · Threads · Facebook, robots-blocked)"]
 
     UI -- "REST" --> API
     API --> CR
@@ -136,17 +151,19 @@ flowchart TD
     CR --> DB
     CO --> DB
     GR --> DB
-    DB --- E1["entities"]
-    DB --- E2["relationships"]
-    DB --- E3["evidence"]
-    DB --- E4["snapshots · crawl_events"]
+    DB --- E1["(:Account) (:Website) (:Domain)<br/>(:Username) (:Email) (:Organization)"]
+    DB --- E2["[:LINKS_TO] [:REFERENCES]<br/>[:POTENTIAL_SAME_IDENTITY] [:CONTRADICTORY]"]
+    DB --- E3["(:Evidence)"]
+    DB --- E4["(:Snapshot) (:CrawlEvent)"]
 ```
 
 The investigation pipeline:
 
 ```mermaid
 flowchart LR
-    S["Seed<br/>@alice_98"] --> L["Adapter lookup"]
+    S["Seed<br/>alice_98"] --> D["Identifier detection<br/>USERNAME · EMAIL · PROFILE_URL · DOMAIN"]
+    D --> SD["Source discovery<br/>every adapter that can answer"]
+    SD --> L["Adapter lookup"]
     L --> X["Entity extraction<br/>links · handles · emails · orgs"]
     X --> C["Candidate generation<br/>DIRECT · INDIRECT · SIMILARITY"]
     C -->|"depth < MAX_DEPTH"| L
@@ -168,27 +185,50 @@ how crawling works — it consumes entities, relationships, evidence and a graph
 
 | Layer     | Choice                                                              |
 | --------- | ------------------------------------------------------------------- |
-| Backend   | Python 3.12+, FastAPI, Pydantic v2, SQLAlchemy 2, SQLite             |
+| Backend   | Python 3.12+, FastAPI, Pydantic v2, Neo4j 5 (official driver)        |
 | Crawling  | httpx (async), BeautifulSoup4, lxml                                  |
 | Graph     | NetworkX (processing), React Flow (visualisation)                    |
 | Frontend  | React 18, TypeScript, Vite, Tailwind CSS v4, `@xyflow/react`         |
 | Testing   | pytest, pytest-asyncio, Ruff                                         |
 
-No Kubernetes, Kafka, Redis, Celery, Neo4j, Elasticsearch or microservices.
-The MVP is a single API process, a single SQLite file and a static frontend —
+No Kubernetes, Kafka, Redis, Celery, Elasticsearch or microservices. The MVP
+is a single API process, one Neo4j instance and a static frontend —
 deliberately. The seams that would let those be introduced later are described
 under [Future architecture](#future-architecture).
+
+**Why Neo4j.** An investigation *is* a graph, so storing it as one removes a
+translation layer: the nodes an analyst sees in the interface are the nodes on
+disk. "Which accounts are two hops from this website?" is a query rather than a
+join plan, and the relationship types in the data model
+(`POTENTIAL_SAME_IDENTITY`, `SHARED_WEBSITE`, `CONTRADICTORY`) are the real
+edge types in the database, not rows in a table that describe edges.
 
 ---
 
 ## Installation
 
-Requirements: **Python 3.12+** and **Node.js 20+**.
+Requirements: **Python 3.12+**, **Node.js 20+**, and a **Neo4j 5** instance.
 
 ```bash
 git clone <repository>
 cd omnicient
 ```
+
+### Neo4j
+
+The quickest option is the container, which is also what
+`docker compose up` runs:
+
+```bash
+docker run -d --name omnicient-neo4j \
+  -p 7474:7474 -p 7687:7687 \
+  -e NEO4J_AUTH=neo4j/<choose-a-password> \
+  neo4j:5.26-community
+```
+
+Neo4j Desktop or a package install works equally well; Omnicient only needs a
+Bolt endpoint and credentials. The browser at <http://localhost:7474> is useful
+for inspecting an investigation graph directly in Cypher.
 
 ### Backend
 
@@ -197,8 +237,11 @@ cd backend
 python -m venv .venv
 source .venv/bin/activate          # Windows: .venv\Scripts\activate
 pip install -r requirements.txt
-cp .env.example .env               # optional: every value has a default
+cp .env.example .env               # then set NEO4J_PASSWORD
 ```
+
+`NEO4J_PASSWORD` is the only value without a working default — no password is
+hardcoded anywhere in the repository.
 
 ### Frontend
 
@@ -230,27 +273,39 @@ Open <http://localhost:5173>, enter `@alice_98`, and press **Start
 investigation**. Demo mode is on by default, so this works with no network
 access and no credentials of any kind.
 
-**Database setup is automatic.** The SQLite file and its parent directory are
-created on startup and the schema is applied with `create_all`. No migration
-step, no manual SQL.
+**Schema setup is automatic.** On startup the API waits for Neo4j (retrying,
+since a container is often still recovering), then applies its constraints and
+indexes. Every statement is `IF NOT EXISTS`, so it is safe on every boot and
+there is no migration step. If Neo4j never answers, the API still starts and
+`GET /api/health` reports `status: degraded` with `database.connected: false`
+rather than the process dying silently.
 
 ### Docker
 
 ```bash
+cp .env.example .env      # set NEO4J_PASSWORD
 docker compose up --build
-# interface: http://localhost:5173
-# API docs:  http://localhost:8000/docs
+# interface:     http://localhost:5173
+# API docs:      http://localhost:8000/docs
+# Neo4j browser: http://localhost:7474
 ```
+
+Compose starts Neo4j first and holds the backend until Bolt actually answers a
+query, so first boot works without a retry.
 
 ---
 
 ## Environment variables
 
-All are optional; see `backend/.env.example`.
+All are optional except `NEO4J_PASSWORD`; see `backend/.env.example`.
 
 | Variable                            | Default                      | Purpose                                                |
 | ----------------------------------- | ---------------------------- | ------------------------------------------------------ |
-| `OMNICIENT_DATABASE_URL`            | `sqlite:///./data/omnicient.db` | SQLAlchemy database URL                            |
+| `NEO4J_URI`                         | `bolt://localhost:7687`      | Bolt endpoint                                          |
+| `NEO4J_USERNAME`                    | `neo4j`                      | Neo4j user                                             |
+| `NEO4J_PASSWORD`                    | *(required)*                 | Neo4j password — never hardcoded                       |
+| `NEO4J_DATABASE`                    | `neo4j`                      | Target database inside the DBMS                        |
+| `NEO4J_STARTUP_TIMEOUT`             | `30`                         | Seconds to wait for Neo4j at boot                      |
 | `OMNICIENT_DEMO_MODE`               | `true`                       | Use the offline synthetic dataset                      |
 | `OMNICIENT_MAX_DEPTH`               | `2`                          | Maximum crawl depth from the seed                      |
 | `OMNICIENT_MAX_PAGES`               | `50`                         | Page budget for one investigation                      |
@@ -299,7 +354,8 @@ FastAPI publishes interactive OpenAPI docs at <http://localhost:8000/docs>.
 
 | Method   | Path                                        | Purpose                                  |
 | -------- | ------------------------------------------- | ---------------------------------------- |
-| `GET`    | `/api/health`                               | Status, mode, sources, confidence bands  |
+| `GET`    | `/api/health`                               | Status, mode, database, sources, bands   |
+| `GET`    | `/api/stats`                                | Dashboard totals across investigations   |
 | `POST`   | `/api/investigations`                       | Create (and by default start) one        |
 | `GET`    | `/api/investigations`                       | List, newest first                       |
 | `GET`    | `/api/investigations/{id}`                  | Detail with timeline and source issues   |
@@ -308,11 +364,17 @@ FastAPI publishes interactive OpenAPI docs at <http://localhost:8000/docs>.
 | `GET`    | `/api/investigations/{id}/entities`         | Entities (optional `?type=`)             |
 | `GET`    | `/api/investigations/{id}/relationships`    | Relationships (optional `?min_score=`)   |
 | `GET`    | `/api/investigations/{id}/graph`            | Nodes, edges, layout hints, statistics   |
+| `GET`    | `/api/investigations/{id}/profile`          | Identity Intelligence Profile            |
+| `GET`    | `/api/investigations/{id}/aliases`          | Potential aliases, with transformations  |
+| `GET`    | `/api/investigations/{id}/paths`            | Ranked routes between two entities       |
+| `GET`    | `/api/investigations/{id}/leads`            | Suggested investigation leads            |
 | `GET`    | `/api/investigations/{id}/events`           | Crawl timeline                           |
+| `GET`    | `/api/investigations/{id}/activity`         | Alias of `/events` (section 27 wording)  |
 | `GET`    | `/api/investigations/{id}/evidence`         | All evidence for the investigation       |
-| `GET`    | `/api/investigations/{id}/export`           | Full JSON export (`?download=true`)      |
+| `GET`    | `/api/investigations/{id}/export`           | Export (`?format=json\|csv`, `?download=true`) |
 | `GET`    | `/api/entities/{id}`                        | Entity with snapshot history             |
 | `GET`    | `/api/entities/{id}/relationships`          | Relationships touching an entity         |
+| `GET`    | `/api/entities/{id}/snapshots`              | Observation history for an entity        |
 | `GET`    | `/api/relationships/{id}`                   | Relationship with endpoints and evidence |
 | `GET`    | `/api/relationships/{id}/evidence`          | Evidence split into support / contradiction |
 | `POST`   | `/api/relationships/{id}/confirm`           | Analyst: evidence reviewed and supportive |
@@ -330,6 +392,118 @@ The backend hands over an investigation graph; the frontend renders it:
   "stats": { "entities": 11, "relationships": 22, "evidence": 45, "contradictions": 2 }
 }
 ```
+
+---
+
+## Identifier detection
+
+Omnicient asks for one thing, and never for a platform:
+
+```
+Start Investigation
+
+[ username, email, profile URL, or domain ]
+
+                              [ Investigate ]
+```
+
+`app/utils/identifier.py` classifies whatever arrives. Detection is ordered
+most-specific first and refuses to guess:
+
+| Input                                | Detected       | Platform    | Searched                        |
+| ------------------------------------ | -------------- | ----------- | ------------------------------- |
+| `alice_98`                           | `USERNAME`     | *(none)*    | every account source            |
+| `alice@example.com`                  | `EMAIL`        | `email`     | public references to the address |
+| `https://github.com/alice-security`  | `PROFILE_URL`  | `github`    | that account, then outward      |
+| `alice.dev`                          | `DOMAIN`       | `website`   | the site, then what it links to |
+| `https://alice.dev/about`            | `WEBSITE_URL`  | `website`   | that page, then what it links to |
+| `not a valid identifier`             | *rejected*     | —           | nothing (HTTP 422)              |
+
+A bare username has **no** platform, and that is the point: the seed becomes a
+`(:Username)` pivot node and `discover_sources()` fans out to every registered
+account adapter. Each source is *asked*; none is assumed to hold the handle,
+and a source that returns nothing leaves no node behind — so the graph shows
+where the handle actually exists rather than where it might.
+
+A URL with a non-HTTP scheme (`javascript:`, `file:`, `ftp:`) is rejected
+outright rather than falling through to be read as a handle, and a known
+platform host whose path is not a profile (`instagram.com/p/XYZ`) is treated as
+a website, never as an account.
+
+---
+
+## Analysis layer
+
+Four services read the investigation graph without changing it. None of them
+stores a second copy: a profile, an alias list, a route or a lead is always a
+statement about the graph's *current* state, and a stored one would go stale
+the moment an analyst confirmed something.
+
+### Identity Intelligence Profile
+
+`GET /api/investigations/{id}/profile` aggregates what was observed - platforms,
+websites, emails, organizations, locations, timeline, statistics - and every
+value names the entities that published it, so the interface can navigate back
+to the source. Two rules keep it from becoming an identity claim:
+
+* **Attribution, not assertion.** `alice.dev` is not "the subject's website".
+  It is a value that six named entities published, with a count to prove it.
+* **Rejected means rejected.** An entity reachable only through relationships
+  the analyst rejected stops contributing its attributes, so a discarded false
+  positive cannot keep shaping the summary from behind the scenes.
+
+Platform hosts are excluded from "public websites": a profile linking to
+`github.com` is an *account*, already shown under platforms.
+
+### Alias detection
+
+`app/services/alias_detection.py` separates two questions that are easy to
+conflate:
+
+1. **Which deterministic transformation relates these handles?** Case,
+   separator substitution/removal/addition, numeric suffix, a known role
+   suffix, a shared root token. A *named* transformation is explainable; a
+   distance score is not.
+2. **Does anything corroborate it?** Shared website, email, avatar,
+   organization or display name - evidence the correlation engine already
+   collected, reused rather than recomputed.
+
+Resemblance alone is capped well below the confident bands, so an alias cannot
+reach HIGH on spelling. The false-positive gate is explicit: `alex`/`alexander`
+and `sam`/`samantha` produce **no** transformation, because a shared prefix is
+not one. Aliases are stored as their own `POTENTIAL_ALIAS` edge - a narrower
+claim than `POTENTIAL_SAME_IDENTITY`, being about the handles rather than the
+people.
+
+### Relationship path explorer
+
+`GET /api/investigations/{id}/paths?source_entity_id=…&target_entity_id=…`
+runs a bounded, parameterized traversal (`MAX_DEPTH=5`, `MAX_PATHS=5`, both
+configurable and hard-capped) scoped to a single investigation. Ranking is
+deterministic and stated openly:
+
+* a rejected step sinks a route outright - the analyst already said no
+* fewer contradictions beat more
+* shorter beats longer; every hop is another inference
+* confirmed steps beat unreviewed ones
+
+Evidence counts toward the score **per hop, not in total** — summing rewards
+length, which is how a two-hop detour ends up outranking the direct connection
+it detours around. Selecting a route highlights exactly its nodes and edges in
+React Flow.
+
+### Investigation leads
+
+`GET /api/investigations/{id}/leads` runs nine deterministic rules over the
+stored graph — shared website clusters, repeated emails, shared avatars,
+potential aliases, unreviewed strong associations, contradictions needing
+review, bridge entities, unresolved candidates and shared organizations — and
+bands them HIGH / MEDIUM / LOW from one score with two thresholds.
+
+Leads are *suggestions*, never conclusions, and nothing here starts a new
+external search: the analyst stays in control. Unreviewed associations are
+summarised rather than enumerated, because one lead per relationship is just
+the relationship list again.
 
 ---
 
@@ -429,6 +603,48 @@ redirect hops, and a polite per-host delay. It follows only URLs discovered
 during the investigation, de-duplicates entities by `(type, platform,
 identifier)`, and honours `robots.txt` where it is available.
 
+### Which sources work live, and why
+
+Measured, not assumed — each platform's robots.txt was checked against
+Omnicient's user agent, and every permitted endpoint was then probed:
+
+| Source | Live? | Endpoint |
+| --- | --- | --- |
+| GitHub | ✅ | `api.github.com/users/{u}` — documented, anonymous |
+| Keybase | ✅ | `keybase.io/_/api/1.0/user/lookup.json` — verified proofs |
+| Mastodon | ✅ | `/api/v1/accounts/lookup` on an allow-listed instance |
+| Bluesky | ✅ | `public.api.bsky.app` AT Protocol appview |
+| DEV | ✅ | `dev.to/api/users/by_username` |
+| Websites | ✅ | the page itself, robots permitting |
+| Instagram | robots off | `Disallow: /`, but the public profile parses |
+| Facebook | robots off | `Disallow: /`, but public pages parse |
+| Threads | robots off | `Disallow: /`, but the public profile parses |
+| Reddit | ❌ | `Disallow: /` — and HTTP 403 to non-browser clients |
+| GitLab, Codeberg, Gravatar, Lobsters | ❌ | `Disallow:` on the API path |
+
+**"robots off"** means the source is reachable only when the operator sets
+`OMNICIENT_RESPECT_ROBOTS=false`. Nothing else changes: Omnicient still sends
+its own identifying user agent, keeps the per-host delay and the crawl budget,
+and does not impersonate a browser's TLS fingerprint, rotate user agents or
+proxies, or call private endpoints. robots.txt is an advisory protocol, so
+whether to consult it is the operator's call — but these platforms' terms of
+service restrict automated collection independently of it, and that judgement
+is the operator's too. Reddit is unreachable either way: it answers a
+non-browser client with HTTP 403.
+
+The interface shows `robots: ignored` on the dashboard whenever the setting is
+off, so an analyst always knows which policy produced the graph they are
+reading.
+
+**Keybase is the strongest legitimate pivot in the set.** Its entire purpose is
+publishing *verified* links between one person's accounts: the user signs a
+statement on each platform and Keybase checks it. One lookup of `keybase/chris`
+yields X, GitHub, Reddit and Hacker News handles plus a personal domain — as
+`EXPLICIT_LINK` evidence (+70), because the account holder demonstrably
+controlled both ends. Omnicient still does not *claim* the identity on that
+basis: a proof shows control of accounts, not who the human is, and it can be
+stale.
+
 ### Instagram, Threads and Facebook cannot be crawled live
 
 This is worth stating up front, because it is the first thing you will hit.
@@ -450,24 +666,43 @@ instagram:<handle> could not be read: robots.txt at https://instagram.com disall
 That is the tool working as designed, not a failure. The options are:
 
 1. **Demo mode** (the default) — the full pipeline, offline, on synthetic data.
-2. **Seed a website instead** — `platform: website`, e.g. `alice.dev`. Personal
-   sites usually permit crawling, and a personal site is the strongest pivot in
-   a public-source investigation anyway: it is where people list their own
-   accounts. This path works live today and yields GitHub, Reddit, X, LinkedIn,
-   Mastodon and Threads accounts, emails and organizations.
-3. `OMNICIENT_RESPECT_ROBOTS=false` — the operator's call, and their
-   responsibility. Note that it changes little in practice: Meta platforms serve
-   logged-out clients a login wall, which Omnicient reports as `PRIVATE` or
-   `BLOCKED` and does not work around. Their terms of service separately
-   prohibit automated collection.
+2. **Seed a domain instead** — just type `alice.dev`; the identifier detector
+   does the rest. Personal sites usually permit crawling, and a personal site
+   is the strongest pivot in a public-source investigation anyway: it is where
+   people list their own accounts. This path works live today and yields
+   GitHub, Reddit, X, LinkedIn, Mastodon and Threads accounts, emails and
+   organizations.
+3. **Seed a GitHub or Reddit handle** — both adapters read the documented
+   public JSON those platforms publish for anonymous readers, so they work live
+   without any of the problems above.
+4. `OMNICIENT_RESPECT_ROBOTS=false` — the operator's call, and their
+   responsibility. Be clear about what this does and does not buy you. Measured
+   against the live sources:
+
+   | Source | robots respected | robots disabled |
+   | --- | --- | --- |
+   | GitHub | works | works (robots permits it) |
+   | Website | works | works |
+   | Instagram | `ROBOTS_DISALLOWED` | a *prominent* public profile parsed |
+   | Reddit | `ROBOTS_DISALLOWED` | `BLOCKED` (HTTP 403) |
+
+   So disabling robots does not reliably unlock these platforms. Reddit refuses
+   a non-browser client outright, and Instagram's terms separately prohibit
+   automated collection whatever robots.txt says. Getting consistently past
+   either needs TLS-fingerprint impersonation, rotating user agents, proxy pools
+   or undocumented private endpoints — every one of which is out of scope by
+   design (section 5). Omnicient reports the refusal and moves on.
 
 **Other known limitations, stated plainly:**
 
 - Only the first page of a website is fetched, and only links to *other* hosts
   become new entities — a site's own internal pages are not identities.
-- GitHub, Reddit, X, LinkedIn, YouTube and Mastodon are *recognised* (their
-  URLs parse into platform + identifier) but have no adapter yet, so they
-  appear as unresolved candidate entities in live mode.
+- X, LinkedIn, YouTube and Mastodon are *recognised* (their URLs parse into
+  platform + identifier) but have no adapter yet, so they appear as unresolved
+  candidate entities in live mode.
+- GitHub and Reddit rate limit anonymous clients. Omnicient reports the limit
+  and moves on rather than working around it, so a large live investigation may
+  see `RATE_LIMITED` on those sources.
 - Avatar comparison is URL-based (see above).
 - Organization extraction is conservative and worth few points by design.
 - A failing source never fails an investigation: the reason is recorded in the
@@ -495,7 +730,12 @@ a request-forgery primitive unless it is constrained. It is constrained:
 - **Structured logging** with automatic redaction of any field whose name looks
   like a credential. Omnicient handles no passwords, tokens, cookies or
   sessions at all.
-- **Foreign keys enforced** in SQLite, with cascade deletes.
+- **Uniqueness enforced by the database.** Neo4j constraints make an entity
+  unique per `(investigation, type, platform, identifier)`, so de-duplication
+  cannot drift from what the crawler assumes.
+- **No Cypher injection.** Every query is parameterized. The two places Cypher
+  cannot take a parameter — node labels and relationship types — are resolved
+  through fixed allow-lists derived from the enums.
 
 Tests cover the SSRF guard, the redirect re-validation path and the size limit.
 
@@ -535,25 +775,35 @@ omnicient/
 │   ├── app/
 │   │   ├── main.py             FastAPI application, CORS, error handlers
 │   │   ├── config.py           Settings + ScoringConfig (all point values)
-│   │   ├── database.py         Engine, session factory, schema creation
+│   │   ├── database.py         Neo4j driver, constraints, indexes
+│   │   ├── repository.py       All Cypher: the only module that queries
 │   │   ├── demo_data.py        Synthetic dataset and offline adapters
 │   │   ├── api/                health, investigations, entities,
 │   │   │                       relationships, evidence
-│   │   ├── models/             SQLAlchemy tables + shared enums
+│   │   ├── models/             Domain records (plain dataclasses) + enums
 │   │   ├── schemas/            Pydantic request/response contract
-│   │   ├── services/           crawler, discovery, correlation, graph,
-│   │   │                       investigation (orchestration)
-│   │   ├── sources/            base + instagram, threads, facebook, website
-│   │   └── utils/              normalization, url_parser, validation, logging
-│   ├── tests/                  normalization, url_parser, correlation,
-│   │                           graph, sources, api
+│   │   │                       (+ profile, alias, path, lead)
+│   │   ├── services/           crawler, discovery, correlation,
+│   │   │                       alias_detection, identity_profile, paths,
+│   │   │                       leads, graph, investigation (orchestration)
+│   │   ├── sources/            base + github, keybase, mastodon, bluesky,
+│   │   │                       devto, website, instagram, reddit, threads,
+│   │   │                       facebook
+│   │   └── utils/              identifier, normalization, url_parser,
+│   │                           validation, logging
+│   ├── tests/                  identifier, normalization, url_parser,
+│   │                           correlation, alias_detection,
+│   │                           identity_profile, paths, leads, graph,
+│   │                           sources, api
 │   ├── requirements.txt
 │   └── .env.example
 ├── frontend/
 │   ├── src/
 │   │   ├── components/         InvestigationGraph, EntityNode, EntityPanel,
 │   │   │                       RelationshipPanel, EvidencePanel, Sidebar,
-│   │   │                       Filters, SearchBar, InvestigationHeader
+│   │   │                       Filters, SearchBar, ActivityLog,
+│   │   │                       IdentityProfilePanel, LeadsPanel,
+│   │   │                       PathExplorer, InvestigationHeader
 │   │   ├── pages/              Dashboard, Investigation
 │   │   ├── api/client.ts       Typed REST client
 │   │   ├── types/index.ts      The API contract in TypeScript
@@ -567,24 +817,63 @@ omnicient/
 
 ### Data model
 
-```mermaid
-erDiagram
-    INVESTIGATIONS ||--o{ ENTITIES : discovers
-    INVESTIGATIONS ||--o{ RELATIONSHIPS : contains
-    INVESTIGATIONS ||--o{ EVIDENCE : collects
-    INVESTIGATIONS ||--o{ CRAWL_EVENTS : records
-    ENTITIES ||--o{ SNAPSHOTS : "observed as"
-    ENTITIES ||--o{ RELATIONSHIPS : "source / target"
-    RELATIONSHIPS ||--o{ EVIDENCE : "explained by"
+Everything is a node or a relationship in Neo4j:
+
+```
+(:Investigation)-[:DISCOVERED]->(:Entity:Account|Website|Domain|Username|Email|Organization)
+(:Entity)-[:LINKS_TO|REFERENCES|SHARED_WEBSITE|
+           POTENTIAL_SAME_IDENTITY|CONTRADICTORY|...]->(:Entity)
+(:Entity)-[:HAS_SNAPSHOT]->(:Snapshot)
+(:Investigation)-[:COLLECTED]->(:Evidence)-[:CONCERNS]->(:Entity)
+(:Investigation)-[:LOGGED]->(:CrawlEvent)
+```
+
+Each entity carries the shared `:Entity` label *and* one for its type, so
+`MATCH (a:Account)` works exactly as the data model describes while uniform
+traversals stay simple.
+
+**Where evidence lives.** A scored association is a native Neo4j relationship —
+that is the whole point of using a graph database. But a Neo4j relationship
+cannot itself be the endpoint of another relationship, so the `SUPPORTED_BY`
+edge in the conceptual model is realised as an `(:Evidence)` node carrying the
+`relationship_id` of the edge it explains, indexed for exactly that lookup.
+Every observation behind a score is one indexed query away, and the graph stays
+traversable.
+
+Useful queries once an investigation has run:
+
+```cypher
+// Every association an analyst confirmed, strongest first
+MATCH (a:Entity)-[r:POTENTIAL_SAME_IDENTITY]->(b:Entity)
+WHERE r.analyst_status = 'CONFIRMED'
+RETURN a.name, b.name, r.confidence_score, r.confidence_level
+ORDER BY r.confidence_score DESC;
+
+// The evidence behind one relationship
+MATCH (v:Evidence {relationship_id: $id})
+RETURN v.type, v.description, v.weight, v.supports, v.source_url
+ORDER BY v.weight DESC;
+
+// Accounts reachable from a website, two hops out
+MATCH (w:Website {identifier: 'alice.dev'})-[*1..2]-(a:Account)
+RETURN DISTINCT a.platform, a.identifier;
 ```
 
 Entity types: `ACCOUNT`, `WEBSITE`, `DOMAIN`, `USERNAME`, `EMAIL`, `PERSON`,
 `ORGANIZATION`. Relationship types: `LINKS_TO`, `REFERENCES`, `USES_USERNAME`,
 `SHARED_WEBSITE`, `SHARED_EMAIL`, `SHARED_AVATAR`, `SHARED_ATTRIBUTE`,
-`POTENTIAL_SAME_IDENTITY`, `CONTRADICTORY`. Evidence types: `EXPLICIT_LINK`,
+`POTENTIAL_SAME_IDENTITY`, `POTENTIAL_ALIAS`, `CONTRADICTORY`. Evidence types: `EXPLICIT_LINK`,
 `SAME_WEBSITE`, `SAME_USERNAME`, `SIMILAR_USERNAME`, `SAME_DISPLAY_NAME`,
 `SAME_AVATAR`, `SIMILAR_BIO`, `SHARED_EMAIL`, `SHARED_ORGANIZATION`,
-`CONTRADICTORY_ATTRIBUTE`.
+`CONTRADICTORY_ATTRIBUTE`, `USERNAME_TRANSFORMATION`, `SHARED_ROOT_TOKEN`.
+
+Every evidence item carries its full provenance — what was observed
+(`extracted_value`), the comparison form that actually matched
+(`normalized_value`), where (`source_url`, `source_entity_id`), when
+(`collected_at`), which entities it connects, and what it did to the score
+(`weight`, `stance`). `stance` is `SUPPORTING`, `CONTRADICTORY` or `NEUTRAL`;
+neutral covers observations that are recorded provenance but move no score,
+such as an alias transformation.
 
 A **snapshot** is written every time an entity is observed. The MVP only stores
 them; keeping the history from day one is what makes temporal analysis
@@ -597,7 +886,7 @@ possible later without a migration.
 ```bash
 cd backend
 source .venv/bin/activate
-pytest              # 110 tests
+pytest              # 269 tests
 ruff check .        # lint
 ```
 
@@ -607,12 +896,25 @@ npm run typecheck
 npm run build
 ```
 
-The suite covers normalization (handles, URLs, domains, platforms,
-similarity), URL parsing across nine platforms plus the SSRF guard, every
-correlation rule including contradictions and the no-evidence case, entity and
-relationship de-duplication, evidence attachment, snapshot writing, graph
-layout determinism, and the full API contract — creation, crawling, graph
-retrieval, evidence, confirm/reject and export. Tests run entirely offline.
+The suite covers identifier detection (usernames, emails, profile URLs,
+domains, invalid input and rejected URL schemes), normalization, URL parsing
+across nine platforms plus the SSRF guard, every correlation rule including
+contradictions and the no-evidence case, the source adapters against recorded
+payloads, entity and relationship de-duplication, evidence attachment, snapshot
+writing, graph layout determinism, preservation of analyst decisions across a
+re-crawl, and the full API contract — creation, crawling, graph retrieval,
+evidence, confirm/reject and export.
+
+No test touches the network. The persistence and API tests need Neo4j and are
+**skipped with an explanatory message** when none is reachable, so the
+pure-logic tests still run for a contributor without a database:
+
+```bash
+NEO4J_TEST_URI=bolt://localhost:7687 NEO4J_TEST_PASSWORD=… pytest
+```
+
+The database those point at is **wiped** at the start of the session, so aim
+them at a scratch instance, never at real investigation data.
 
 ---
 
@@ -624,7 +926,7 @@ The API contract is the seam, so the two halves can be built independently.
 | -------------------------------------------------------- | --------------------------------------------------------- |
 | `app/sources/`, `services/crawler.py`, `discovery.py`     | `frontend/src/components/`, `pages/`                       |
 | `services/correlation.py`, `utils/normalization.py`       | React Flow graph, entity/relationship/evidence panels       |
-| `models/`, `database.py`, `api/`, backend tests           | filters, analyst workflow, dashboard                        |
+| `models/`, `repository.py`, `api/`, backend tests          | filters, analyst workflow, dashboard                        |
 | *Owns: discovery, extraction, correlation, evidence*      | *Owns: investigation interface and analyst experience*      |
 
 The frontend never needs to know how crawling works: it receives
@@ -678,14 +980,22 @@ replaced by probabilistic entity resolution or a learned ranker while the
 evidence model, API and interface stay as they are. Confirmed and rejected
 relationships accumulate as labelled training data from day one.
 
-**Scale.** SQLite and in-process services are the MVP's deliberate choice. The
-seams for growth are already there: swap the SQLAlchemy URL for PostgreSQL,
-move `InvestigationService.run` behind a task queue, and mirror the graph into
-a graph store — none of which changes the REST contract the frontend depends on.
+**Scale.** In-process services are the MVP's deliberate choice. The seams for
+growth are already there: `Neo4jRepository` is the only module that touches the
+database, so query tuning, read replicas or a caching layer land in one file,
+and `InvestigationService.run` can move behind a task queue — none of which
+changes the REST contract the frontend depends on.
 
-**Export formats.** JSON export is implemented. The export bundle is
-intentionally flat so CSV, HTML/PDF reporting and STIX can be generated from
-it without re-querying.
+**Graph analytics.** Storing the investigation as a real graph means shortest
+path, centrality, community detection and bridge-entity analysis are Cypher
+queries against data that already exists, rather than features needing a new
+store first.
+
+**Export formats.** JSON (the complete record — entities, relationships,
+evidence, snapshots, analyst decisions and timeline) and CSV (one row per
+relationship, with its supporting and contradicting evidence) are implemented.
+The bundle is intentionally flat so HTML/PDF reporting and STIX can be
+generated from it without re-querying.
 
 ---
 
