@@ -3,7 +3,7 @@ import { useParams } from 'react-router-dom'
 import { ReactFlowProvider } from '@xyflow/react'
 import { api } from '../api/client'
 import EntityPanel from '../components/EntityPanel'
-import InvestigationGraph from '../components/InvestigationGraph'
+import InvestigationCanvas from '../components/graph/InvestigationCanvas'
 import InvestigationHeader from '../components/InvestigationHeader'
 import RelationshipPanel from '../components/RelationshipPanel'
 import IdentityProfilePanel from '../components/IdentityProfilePanel'
@@ -34,6 +34,29 @@ const RUNNING = ['CREATED', 'CRAWLING', 'ANALYZING']
  * the left, the inspector on the right.
  */
 type InspectorTab = 'profile' | 'leads' | 'paths'
+
+/** The stages an analyst watches during a crawl (section 31). */
+const CRAWL_STAGES = [
+  { id: 'CREATED', label: 'Identifier detected' },
+  { id: 'CRAWLING', label: 'Sources queried' },
+  { id: 'ANALYZING', label: 'Correlating entities' },
+] as const
+
+const STAGE_ORDER = ['CREATED', 'CRAWLING', 'ANALYZING', 'COMPLETED']
+
+function stageReached(
+  investigation: InvestigationDetail,
+  stage: string,
+): boolean {
+  return STAGE_ORDER.indexOf(investigation.status) > STAGE_ORDER.indexOf(stage)
+}
+
+function stageActive(
+  investigation: InvestigationDetail,
+  stage: string,
+): boolean {
+  return investigation.status === stage
+}
 
 export default function Investigation() {
   const { id = '' } = useParams()
@@ -182,16 +205,39 @@ export default function Investigation() {
 
         <main className="relative min-w-0 flex-1">
           {running && (
-            <div className="absolute inset-0 z-10 flex items-center justify-center bg-void/80">
-              <div className="rounded border border-line bg-panel px-6 py-5 text-center">
-                <div className="font-mono text-[13px] text-accent">
-                  <span className="mr-2 animate-pulse">●</span>
-                  {investigation.status === 'ANALYZING' ? 'Correlating…' : 'Crawling…'}
+            <div className="absolute inset-0 z-10 flex items-center justify-center bg-void/85 backdrop-blur-[2px]">
+              <div className="w-[340px] rounded-lg border border-line bg-panel px-5 py-4">
+                <div className="font-mono text-[11px] uppercase tracking-[0.14em] text-accent">
+                  Analyzing investigation
                 </div>
-                <div className="mt-2 font-mono text-[11px] text-faint">
-                  entities {investigation.entity_count} · relationships{' '}
-                  {investigation.relationship_count} · evidence{' '}
-                  {investigation.evidence_count}
+                <ul className="mt-3 space-y-1.5">
+                  {CRAWL_STAGES.map((stage) => {
+                    const done = stageReached(investigation, stage.id)
+                    const active = stageActive(investigation, stage.id)
+                    return (
+                      <li
+                        key={stage.id}
+                        className="flex items-center gap-2 font-mono text-[11px]"
+                        style={{
+                          color: done
+                            ? 'var(--color-confirmed)'
+                            : active
+                              ? 'var(--color-accent)'
+                              : 'var(--color-faint)',
+                        }}
+                      >
+                        <span className={active ? 'animate-pulse' : ''}>
+                          {done ? '✓' : active ? '◉' : '○'}
+                        </span>
+                        {stage.label}
+                      </li>
+                    )
+                  })}
+                </ul>
+                <div className="mt-3 border-t border-line pt-2 font-mono text-[11px] text-dim">
+                  {investigation.entity_count} entities discovered
+                  <br />
+                  {investigation.relationship_count} relationships analyzed
                 </div>
               </div>
             </div>
@@ -205,12 +251,13 @@ export default function Investigation() {
 
           {graph && graph.nodes.length > 0 ? (
             <ReactFlowProvider>
-              <InvestigationGraph
+              <InvestigationCanvas
                 graph={graph}
                 filters={filters}
                 selectedNodeId={selectedNodeId}
                 selectedEdgeId={selectedEdgeId}
-                focusNodeId={focusNodeId}
+                focusEntityId={focusNodeId}
+                onFocusChange={setFocusNodeId}
                 layoutKey={layoutKey}
                 highlight={highlight}
                 onSelectNode={selectNode}
@@ -221,12 +268,15 @@ export default function Investigation() {
             !running && (
               <div className="flex h-full items-center justify-center px-8 text-center">
                 <div className="max-w-md">
-                  <div className="panel-title">No entities</div>
+                  <div className="panel-title">No relationships discovered</div>
                   <p className="mt-2 text-[13px] leading-snug text-dim">
-                    Nothing publicly observable was found for this seed. The
-                    account may not exist, may be private, or the platform may
-                    have declined the request — see the activity log for the
-                    exact reason.
+                    Omnicient could not find sufficient public evidence to
+                    expand this investigation. The account may not exist, may be
+                    private, or the platform may have declined the request — the
+                    activity log has the exact reason for each source.
+                  </p>
+                  <p className="mt-2 text-[12px] leading-snug text-faint">
+                    Try another identifier, or run discovery again.
                   </p>
                 </div>
               </div>

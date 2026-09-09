@@ -34,6 +34,7 @@ observation contributed, and the contradictions that argue against them.
 - [Demo mode](#demo-mode)
 - [API documentation](#api-documentation)
 - [Identifier detection](#identifier-detection)
+- [Investigation canvas](#investigation-canvas)
 - [Analysis layer](#analysis-layer)
 - [Correlation methodology](#correlation-methodology)
 - [Confidence scoring](#confidence-scoring)
@@ -432,6 +433,70 @@ a website, never as an account.
 
 ---
 
+## Investigation canvas
+
+The graph is not a network diagram. Forty entities drawn as forty circles is
+a topology picture that tells an analyst nothing at a glance, so the canvas
+regroups the same data into an investigation board:
+
+```
+                    ┌──────────────────┐
+                    │ SOCIAL ACCOUNTS  │
+                    │ @alice_98    IG  │
+                    │ @alice_dev   TH  │
+                    └────────┬─────────┘
+                             │ potential same identity
+   ┌─────────────┐   ┌───────▼────────┐   ┌──────────────┐
+   │ EMAILS      │◄──│   @alice_98    │──►│ WEBSITES     │
+   │ alice@…     │   │   SEED ENTITY  │   │ alice.dev    │
+   └─────────────┘   └───────┬────────┘   └──────────────┘
+                             │
+                    ┌────────▼─────────┐
+                    │ ORGANIZATIONS    │
+                    └──────────────────┘
+```
+
+**The card is the unit of comprehension; the row is the unit of interaction.**
+Each row carries its own React Flow handle, so a relationship is drawn from
+the *entity* it concerns rather than from the box containing it — the curve
+between `@alice_98` and `alice.dev` lands on those two rows.
+
+`investigationToMindMap()` does the regrouping in the frontend. **Neo4j is
+untouched**: the backend returns the same entities, relationships and evidence
+it always did, and every row still carries its real entity id, so selection,
+evidence and the analyst workflow work against the true graph.
+
+### The stroke carries the claim
+
+This is where the product philosophy becomes visual. A confirmed association
+and an unreviewed inference must not look alike, or the graph quietly turns a
+guess into a fact:
+
+| Treatment | Meaning |
+| --- | --- |
+| solid, green | an analyst reviewed the evidence and agreed |
+| dashed | an inference the tool is proposing, not asserting |
+| dotted, red | contradicted, or rejected by an analyst |
+
+Directly observed links (`LINKS_TO`, `REFERENCES`) are solid because they were
+read off a page — no inference is involved in saying a profile links to a site.
+Labels appear on selection, on hover, and on relationships an analyst should
+not miss; labelling every edge produces a wall of text nobody reads.
+
+### Staying legible as it grows
+
+A category holding thirty entities becomes a 900px column that dominates the
+board and cannot be read anyway, so cards cap at ten rows with `+N more`, and
+rows past the cap anchor their edges to the card. Categories collapse to a
+header and a count. The ring radius is solved against the circle enclosing the
+tallest card, which is what stops two tall cards meeting corner to corner —
+measuring against width or height alone lets them overlap.
+
+Layout is deterministic: the same investigation always produces the same
+board, so *reset layout* returns the analyst to the arrangement they knew.
+
+---
+
 ## Analysis layer
 
 Four services read the investigation graph without changing it. None of them
@@ -799,11 +864,16 @@ omnicient/
 │   └── .env.example
 ├── frontend/
 │   ├── src/
-│   │   ├── components/         InvestigationGraph, EntityNode, EntityPanel,
+│   │   ├── components/         EntityPanel,
 │   │   │                       RelationshipPanel, EvidencePanel, Sidebar,
 │   │   │                       Filters, SearchBar, ActivityLog,
 │   │   │                       IdentityProfilePanel, LeadsPanel,
 │   │   │                       PathExplorer, InvestigationHeader
+│   │   ├── components/graph/   InvestigationCanvas, SeedNode,
+│   │   │                       CategoryGroupNode, CategoryItem,
+│   │   │                       RelationshipEdge, GraphToolbar,
+│   │   │                       GraphSearch, GraphLegend, ContextMenu
+│   │   │   └── layout/         mindMapLayout, radialLayout
 │   │   ├── pages/              Dashboard, Investigation
 │   │   ├── api/client.ts       Typed REST client
 │   │   ├── types/index.ts      The API contract in TypeScript
