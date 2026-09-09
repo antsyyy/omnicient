@@ -9,6 +9,8 @@ import {
 export interface EntityNodeData extends Record<string, unknown> {
   node: GraphNode
   dimmed: boolean
+  /** On the selected path, or named by the selected lead. */
+  highlighted?: boolean
 }
 
 /**
@@ -20,7 +22,7 @@ export interface EntityNodeData extends Record<string, unknown> {
  * lead is never mistaken for an observation.
  */
 export default function EntityNode({ data, selected }: NodeProps) {
-  const { node, dimmed } = data as EntityNodeData
+  const { node, dimmed, highlighted } = data as EntityNodeData
   const accent = node.confidence_level
     ? CONFIDENCE_COLOR[node.confidence_level]
     : 'var(--color-line-bright)'
@@ -32,12 +34,14 @@ export default function EntityNode({ data, selected }: NodeProps) {
         minWidth: 168,
         maxWidth: 208,
         opacity: dimmed ? 0.25 : 1,
-        borderColor: selected ? 'var(--color-accent)' : accent,
+        borderColor:
+          selected || highlighted ? 'var(--color-accent)' : accent,
         borderStyle: node.resolved ? 'solid' : 'dashed',
-        borderWidth: node.is_seed || selected ? 2 : 1,
-        boxShadow: selected
-          ? '0 0 0 3px rgba(34, 211, 238, 0.18)'
-          : '0 6px 18px rgba(0, 0, 0, 0.45)',
+        borderWidth: node.is_seed || selected || highlighted ? 2 : 1,
+        boxShadow:
+          selected || highlighted
+            ? '0 0 0 3px rgba(34, 211, 238, 0.18)'
+            : '0 6px 18px rgba(0, 0, 0, 0.45)',
       }}
     >
       <Handle type="target" position={Position.Top} />

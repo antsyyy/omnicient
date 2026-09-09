@@ -13,7 +13,11 @@ import {
   useReactFlow,
 } from '@xyflow/react'
 import EntityNode, { type EntityNodeData } from './EntityNode'
-import type { FilterState, InvestigationGraph as GraphPayload } from '../types'
+import type {
+  FilterState,
+  InvestigationGraph as GraphPayload,
+  PathHighlight,
+} from '../types'
 import { CONFIDENCE_COLOR } from '../lib/display'
 
 const nodeTypes = { entity: EntityNode }
@@ -24,6 +28,12 @@ interface Props {
   selectedNodeId: string | null
   selectedEdgeId: string | null
   focusNodeId: string | null
+  /**
+   * Nodes and edges to spotlight — a selected path, or the entities behind a
+   * lead. Everything outside it dims rather than disappearing, so the route
+   * stays legible in the context of the whole graph.
+   */
+  highlight: PathHighlight | null
   layoutKey: number
   onSelectNode: (id: string | null) => void
   onSelectEdge: (id: string | null) => void
@@ -42,6 +52,7 @@ export default function InvestigationGraph({
   selectedNodeId,
   selectedEdgeId,
   focusNodeId,
+  highlight,
   layoutKey,
   onSelectNode,
   onSelectEdge,
@@ -101,10 +112,13 @@ export default function InvestigationGraph({
           selected: node.id === selectedNodeId,
           data: {
             node,
-            dimmed: focusNeighbours ? !focusNeighbours.has(node.id) : false,
+            dimmed:
+              (focusNeighbours ? !focusNeighbours.has(node.id) : false) ||
+              (highlight ? !highlight.nodeIds.has(node.id) : false),
+            highlighted: highlight ? highlight.nodeIds.has(node.id) : false,
           } satisfies EntityNodeData,
         })),
-    [graph.nodes, visibleNodeIds, selectedNodeId, focusNeighbours],
+    [graph.nodes, visibleNodeIds, selectedNodeId, focusNeighbours, highlight],
   )
 
   const derivedEdges = useMemo<Edge[]>(
@@ -117,9 +131,12 @@ export default function InvestigationGraph({
           const contradictory =
             edge.relationship_type === 'CONTRADICTORY' || edge.contradiction_count > 0
           const rejected = edge.analyst_status === 'REJECTED'
-          const dimmed = focusNeighbours
-            ? !(focusNeighbours.has(edge.source) && focusNeighbours.has(edge.target))
-            : false
+          const onPath = highlight ? highlight.edgeIds.has(edge.id) : false
+          const dimmed =
+            (focusNeighbours
+              ? !(focusNeighbours.has(edge.source) && focusNeighbours.has(edge.target))
+              : false) ||
+            (highlight ? !onPath : false)
           const color = rejected
             ? 'var(--color-rejected)'
             : contradictory
@@ -138,14 +155,14 @@ export default function InvestigationGraph({
             labelBgPadding: [4, 2] as [number, number],
             labelBgBorderRadius: 3,
             style: {
-              stroke: color,
-              strokeWidth: edge.id === selectedEdgeId ? 3 : 1.5,
+              stroke: onPath ? 'var(--color-accent)' : color,
+              strokeWidth: onPath ? 3.5 : edge.id === selectedEdgeId ? 3 : 1.5,
               strokeDasharray: rejected || contradictory ? '5 4' : undefined,
-              opacity: dimmed ? 0.15 : 1,
+              opacity: dimmed ? 0.12 : 1,
             },
           }
         }),
-    [visibleEdges, visibleNodeIds, selectedEdgeId, focusNeighbours],
+    [visibleEdges, visibleNodeIds, selectedEdgeId, focusNeighbours, highlight],
   )
 
   const [nodes, setNodes, onNodesChange] = useNodesState<Node>(derivedNodes)
