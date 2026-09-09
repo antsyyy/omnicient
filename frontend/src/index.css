@@ -112,6 +112,58 @@ body {
   pointer-events: none;
 }
 
+/* --- Investigation canvas -------------------------------------------------- */
+
+/*
+ * A slow dash crawl along the strongest inferred associations.
+ *
+ * Applied only to VERY_HIGH potential-identity edges: the point is to draw
+ * the eye to the claims most worth reviewing, not to animate the board.
+ * Motion is disabled outright for anyone who has asked for reduced motion.
+ */
+@keyframes omni-edge-flow {
+  to {
+    stroke-dashoffset: -24;
+  }
+}
+
+.omni-edge-flow {
+  animation: omni-edge-flow 1.4s linear infinite;
+}
+
+/* The canvas is an investigation board, so it gets a slightly deeper ground
+   than the panels around it and a faint centre glow under the seed. */
+.react-flow__pane {
+  background:
+    radial-gradient(
+      52% 52% at 50% 46%,
+      rgba(34, 211, 238, 0.045) 0%,
+      rgba(7, 10, 15, 0) 70%
+    ),
+    var(--color-void);
+}
+
+/* Selection is expressed by the node components themselves; React Flow's
+   default outline competes with the card borders. */
+.react-flow__node.selected,
+.react-flow__node:focus,
+.react-flow__node:focus-visible {
+  outline: none;
+}
+
+.react-flow__node {
+  transition: opacity 180ms ease;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .omni-edge-flow {
+    animation: none;
+  }
+  .react-flow__node {
+    transition: none;
+  }
+}
+
 /* --- Utilities ------------------------------------------------------------ */
 
 .panel-title {
