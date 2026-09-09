@@ -11,6 +11,7 @@ and the investigation continues with whatever evidence it already has.
 from __future__ import annotations
 
 import asyncio
+import json
 import time
 from abc import ABC, abstractmethod
 from dataclasses import dataclass, field
@@ -187,14 +188,16 @@ class SafeFetcher:
         client: httpx.AsyncClient | None = None,
     ) -> None:
         self.settings = settings or get_settings()
+        # Applied per request rather than baked into the client, so an injected
+        # client (tests, a shared pool) behaves exactly like one we built.
+        self.default_headers = {
+            "User-Agent": self.settings.user_agent,
+            "Accept": "text/html,application/xhtml+xml",
+            "Accept-Language": "en-US,en;q=0.9",
+        }
         self._client = client or httpx.AsyncClient(
             timeout=self.settings.request_timeout,
             follow_redirects=False,
-            headers={
-                "User-Agent": self.settings.user_agent,
-                "Accept": "text/html,application/xhtml+xml",
-                "Accept-Language": "en-US,en;q=0.9",
-            },
         )
         self._owns_client = client is None
         self._last_request: dict[str, float] = {}
@@ -207,8 +210,14 @@ class SafeFetcher:
 
     # -- request pipeline --------------------------------------------------
 
-    async def get(self, url: str) -> FetchResult:
+    async def get(
+        self, url: str, headers: dict[str, str] | None = None
+    ) -> FetchResult:
         """Fetch a public URL, following validated redirects.
+
+        ``headers`` overrides the client defaults for this request only - a
+        JSON source has to ask for JSON, or an API answers 415 rather than
+        serving the document.
 
         Raises :class:`SourceError` for every failure mode so callers handle
         one exception type: SSRF rejection, robots restriction, rate limiting,
@@ -228,7 +237,7 @@ class SafeFetcher:
             seen.add(validated.url)
             await self._check_robots(validated.url)
             await self._respect_delay(validated.host)
-            response = await self._request(validated.url)
+            response = await self._request(validated.url, headers)
 
             if response.status_code in (301, 302, 303, 307, 308):
                 location = response.headers.get("location")
@@ -275,9 +284,12 @@ class SafeFetcher:
             raise SourceError(FailureReason.UNSAFE_URL, str(exc), url) from exc
         return validated
 
-    async def _request(self, url: str) -> httpx.Response:
+    async def _request(
+        self, url: str, headers: dict[str, str] | None = None
+    ) -> httpx.Response:
         try:
-            request = self._client.build_request("GET", url)
+            merged = {**self.default_headers, **(headers or {})}
+            request = self._client.build_request("GET", url, headers=merged)
             return await self._client.send(request, stream=True)
         except httpx.TimeoutException as exc:
             raise SourceError(
@@ -462,7 +474,17 @@ def page_is_profile_for(meta: dict[str, str], identifier: str) -> bool:
     first = segments[0].lstrip("@").lower()
     if first in NON_PROFILE_PATHS:
         return False
-    return first == identifier.lower()
+    if first == identifier.lower():
+        return True
+    # Platforms rewrite a handle to their own canonical spelling: Facebook
+    # answers /cocacola with canonical /Coca-Cola/. Comparing the letters and
+    # digits alone accepts that without accepting a different account.
+    return _squash(first) == _squash(identifier) and bool(_squash(identifier))
+
+
+def _squash(value: str) -> str:
+    """Letters and digits only, lowercased - for comparing handle spellings."""
+    return "".join(ch for ch in value.lower() if ch.isalnum())
 
 
 def absolute_links(html: str, base_url: str, limit: int = 200) -> list[str]:
@@ -617,6 +639,11 @@ class OpenGraphProfileAdapter(SourceAdapter):
         if not any([display_name, bio, avatar, links]):
             return None
 
+        metadata: dict[str, Any] = {}
+        if meta.get("og:type"):
+            metadata["og_type"] = meta["og:type"]
+        metadata.update(self.extract_metadata(meta, html))
+
         return enrich_profile(
             ObservedProfile(
                 entity_type=EntityType.ACCOUNT,
@@ -629,7 +656,7 @@ class OpenGraphProfileAdapter(SourceAdapter):
                 avatar_url=avatar,
                 external_links=links,
                 source=self.platform,
-                metadata={"og_type": meta.get("og:type")} if meta.get("og:type") else {},
+                metadata=metadata,
             )
         )
 
@@ -656,3 +683,99 @@ class OpenGraphProfileAdapter(SourceAdapter):
         from ..utils.url_parser import extract_urls
 
         return extract_urls(bio)
+
+    def extract_metadata(self, meta: dict[str, str], html: str) -> dict[str, Any]:
+        """Extra observed fields to record, e.g. audience counts.
+
+        Given the already-parsed meta tags so a subclass never re-parses the
+        page.  Nothing here is compared by the correlation engine; it is
+        context for the analyst.
+        """
+        return {}
+
+
+class JsonProfileAdapter(SourceAdapter):
+    """Adapter for platforms that publish public profiles as JSON.
+
+    GitHub and Reddit both serve a documented, unauthenticated endpoint
+    describing a public account.  Using it is the *polite* option: it is the
+    interface those platforms publish for this purpose, it returns far less
+    data than scraping the HTML page, and it is stable.  No token, cookie or
+    private endpoint is involved - an anonymous request is rate limited, and a
+    rate limit is reported (``RATE_LIMITED``) rather than worked around.
+    """
+
+    #: Public JSON endpoint, formatted with ``identifier``.
+    api_template: str = ""
+    #: Human-facing profile URL, formatted with ``identifier``.
+    url_template: str = ""
+    #: Sent as ``Accept``.  Without it the shared client asks for HTML and a
+    #: JSON API answers 415.
+    accept: str = "application/json"
+
+    def __init__(self, fetcher: SafeFetcher | None = None) -> None:
+        self.fetcher = fetcher or SafeFetcher()
+
+    def profile_url(self, identifier: str) -> str:
+        return self.url_template.format(identifier=identifier)
+
+    def api_url(self, identifier: str) -> str:
+        return self.api_template.format(identifier=identifier)
+
+    async def lookup(self, identifier: str) -> LookupResult:
+        """Fetch and parse a public profile document."""
+        from ..utils.normalization import NormalizationError, normalize_username
+
+        try:
+            identifier = normalize_username(identifier)
+        except NormalizationError as exc:
+            return LookupResult.failure(SourceError(FailureReason.NOT_FOUND, str(exc)))
+
+        api_url = self.api_url(identifier)
+        try:
+            fetched = await self.fetcher.get(api_url, headers={"Accept": self.accept})
+        except SourceError as exc:
+            logger.info(
+                "source_unavailable platform=%s identifier=%s reason=%s",
+                self.platform,
+                identifier,
+                exc.reason,
+            )
+            return LookupResult.failure(exc)
+
+        try:
+            payload = json.loads(fetched.text)
+        except ValueError:
+            # A login wall or an error page served where JSON was expected.
+            return LookupResult.failure(
+                SourceError(
+                    FailureReason.PARSE_ERROR,
+                    f"{self.name} did not return JSON for '{identifier}'",
+                    api_url,
+                ),
+                pages_fetched=1,
+            )
+
+        try:
+            profile = self.parse_json(identifier, payload, self.profile_url(identifier))
+        except Exception as exc:  # noqa: BLE001 - malformed payloads must not abort
+            logger.warning(
+                "parse_failed platform=%s identifier=%s error=%s",
+                self.platform,
+                identifier,
+                exc,
+            )
+            return LookupResult.failure(
+                SourceError(FailureReason.PARSE_ERROR, str(exc), api_url),
+                pages_fetched=1,
+            )
+
+        if profile is None:
+            return LookupResult(pages_fetched=1, url=api_url)
+        return LookupResult(entities=[profile], pages_fetched=1, url=api_url)
+
+    @abstractmethod
+    def parse_json(
+        self, identifier: str, payload: Any, url: str
+    ) -> ObservedProfile | None:
+        """Build an :class:`ObservedProfile` from the public JSON document."""

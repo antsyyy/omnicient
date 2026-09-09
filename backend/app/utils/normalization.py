@@ -28,6 +28,12 @@ PLATFORM_HOSTS: dict[str, tuple[str, ...]] = {
     "linkedin": ("linkedin.com",),
     "youtube": ("youtube.com", "youtu.be"),
     "mastodon": ("mastodon.social", "fosstodon.org", "infosec.exchange"),
+    "bluesky": ("bsky.app", "bsky.social"),
+    "devto": ("dev.to",),
+    "keybase": ("keybase.io",),
+    "hackernews": ("news.ycombinator.com",),
+    "pypi": ("pypi.org",),
+    "telegram": ("t.me", "telegram.me"),
 }
 
 # Alternative spellings analysts (and profile pages) actually use.
@@ -45,6 +51,13 @@ PLATFORM_ALIASES: dict[str, str] = {
     "site": "website",
     "web": "website",
     "homepage": "website",
+    "bsky": "bluesky",
+    "dev": "devto",
+    "dev.to": "devto",
+    "hn": "hackernews",
+    "ycombinator": "hackernews",
+    "kb": "keybase",
+    "tg": "telegram",
 }
 
 # Human-readable labels for the UI and evidence descriptions.
@@ -58,6 +71,14 @@ PLATFORM_LABELS: dict[str, str] = {
     "linkedin": "LinkedIn",
     "youtube": "YouTube",
     "mastodon": "Mastodon",
+    "bluesky": "Bluesky",
+    "devto": "DEV",
+    "keybase": "Keybase",
+    "hackernews": "Hacker News",
+    "pypi": "PyPI",
+    "telegram": "Telegram",
+    "username": "Username",
+    "organization": "Organization",
     "website": "Website",
     "domain": "Domain",
     "email": "Email",
@@ -365,3 +386,45 @@ def normalize_location(value: str | None) -> str | None:
         return None
     cleaned = " ".join(value.replace(",", " ").split()).strip().lower()
     return cleaned or None
+
+
+#: Hosts that two people can both link to without it meaning anything.
+#:
+#: A shared *personal* domain is strong evidence - it is a thing one person
+#: owns.  A shared link shortener, mailbox provider, marketplace or
+#: link-in-bio service is not: half the internet links to ``linktr.ee``.
+#: Counting those as a shared website is a straightforward way to manufacture
+#: false positives, so they earn nothing.
+NON_IDENTIFYING_HOSTS: frozenset[str] = frozenset(
+    {
+        # Link shorteners and redirectors.
+        "amzn.to", "bit.ly", "buff.ly", "cutt.ly", "goo.gl", "is.gd",
+        "lnkd.in", "ow.ly", "rb.gy", "shorturl.at", "t.co", "tinyurl.com",
+        # Link-in-bio services.
+        "allmylinks.com", "beacons.ai", "carrd.co", "linkin.bio",
+        "linktr.ee", "lnk.bio", "milkshake.app", "solo.to", "taplink.cc",
+        # Mailbox providers.
+        "aol.com", "gmail.com", "googlemail.com", "hotmail.com", "icloud.com",
+        "mail.com", "outlook.com", "proton.me", "protonmail.com", "yahoo.com",
+        "yandex.ru", "zoho.com",
+        # Generic destinations and storage.
+        "amazon.com", "discord.gg", "docs.google.com", "drive.google.com",
+        "google.com", "paypal.me", "wa.me", "youtu.be",
+    }
+)
+
+
+def is_identifying_host(value: str | None) -> bool:
+    """True when a host is specific enough to tie two profiles together.
+
+    Used by the correlation engine before it credits a shared website.
+    """
+    domain = normalize_domain(value)
+    if not domain:
+        return False
+    if domain in NON_IDENTIFYING_HOSTS:
+        return False
+    # A subdomain of a generic host is just as generic: sites.google.com/x.
+    return not any(
+        domain.endswith(f".{host}") for host in NON_IDENTIFYING_HOSTS
+    )

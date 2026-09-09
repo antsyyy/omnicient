@@ -13,26 +13,44 @@ from ..config import Settings, get_settings
 from ..utils.logging import get_logger
 from .base import (
     FailureReason,
+    JsonProfileAdapter,
     LookupResult,
     ObservedProfile,
+    OpenGraphProfileAdapter,
     SafeFetcher,
     SourceAdapter,
     SourceError,
 )
+from .bluesky import BlueskyAdapter
+from .devto import DevToAdapter
 from .facebook import FacebookAdapter
+from .github import GitHubAdapter
 from .instagram import InstagramAdapter
+from .keybase import KeybaseAdapter
+from .mastodon import MastodonAdapter
+from .reddit import RedditAdapter
 from .threads import ThreadsAdapter
 from .website import WebsiteAdapter
 
 logger = get_logger(__name__)
 
-#: Adapters shipped with the MVP.  Future adapters (GitHub, Reddit, X,
-#: LinkedIn, YouTube, Mastodon) are registered here and nowhere else.
+#: Adapters shipped with the MVP.  Future adapters (X, LinkedIn, YouTube,
+#: Mastodon, GitLab) are registered here and nowhere else.
 ADAPTER_CLASSES: tuple[type[SourceAdapter], ...] = (
+    # Sources whose robots.txt permits anonymous lookups, so they work live.
+    GitHubAdapter,
+    KeybaseAdapter,
+    MastodonAdapter,
+    BlueskyAdapter,
+    DevToAdapter,
+    WebsiteAdapter,
+    # Sources that publish "Disallow: /" for everything.  Kept registered so a
+    # discovered link still becomes a node and the refusal is reported, rather
+    # than the platform silently vanishing from the investigation.
     InstagramAdapter,
+    RedditAdapter,
     ThreadsAdapter,
     FacebookAdapter,
-    WebsiteAdapter,
 )
 
 
@@ -79,11 +97,19 @@ def build_registry(
 
 __all__ = [
     "ADAPTER_CLASSES",
+    "BlueskyAdapter",
+    "DevToAdapter",
     "FacebookAdapter",
     "FailureReason",
+    "GitHubAdapter",
+    "KeybaseAdapter",
+    "MastodonAdapter",
     "InstagramAdapter",
+    "JsonProfileAdapter",
     "LookupResult",
     "ObservedProfile",
+    "OpenGraphProfileAdapter",
+    "RedditAdapter",
     "SafeFetcher",
     "SourceAdapter",
     "SourceError",

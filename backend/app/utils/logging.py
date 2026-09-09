@@ -38,6 +38,10 @@ def configure_logging(level: str = "INFO") -> None:
     root.setLevel(level.upper())
     for noisy in ("httpx", "httpcore", "urllib3"):
         logging.getLogger(noisy).setLevel(logging.WARNING)
+    # The driver reports every "IF NOT EXISTS" schema statement that was
+    # already satisfied.  That is expected on each boot and would otherwise
+    # bury the application's own startup lines.
+    logging.getLogger("neo4j.notifications").setLevel(logging.WARNING)
 
 
 def get_logger(name: str) -> logging.Logger:

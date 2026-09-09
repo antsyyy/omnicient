@@ -133,3 +133,70 @@ def test_is_blocked_ip() -> None:
     assert is_blocked_ip("172.16.0.5")
     assert is_blocked_ip("not-an-ip")
     assert not is_blocked_ip("93.184.216.34")
+
+
+@pytest.mark.parametrize(
+    "bio",
+    [
+        "Follow my Instagram account for updates",
+        "Check the GitHub profile here",
+        "My Reddit page has more",
+        "official Bluesky account (check username)",
+        "Posting to Threads and Mastodon these days",
+    ],
+)
+def test_a_platform_named_in_prose_is_not_a_reference(bio: str) -> None:
+    """"Instagram account for updates" must not yield ``instagram:for``.
+
+    A mention only counts when the platform word is attached to the handle by
+    a separator or an "@"; bare adjacency is prose. Without this every bio
+    that merely names a platform plants a junk node in the graph.
+    """
+    assert extract_references(bio, []) == []
+
+
+@pytest.mark.parametrize(
+    "bio,platform,identifier",
+    [
+        ("Threads: @alice_dev", "threads", "alice_dev"),
+        ("GitHub - alice-security", "github", "alice-security"),
+        ("IG @alice_98", "instagram", "alice_98"),
+        ("FB: alice.private", "facebook", "alice.private"),
+        ("Keybase: alice", "keybase", "alice"),
+        ("Find me on Mastodon > @alice", "mastodon", "alice"),
+        # Unattached, but the token carries handle punctuation.
+        ("GitHub alice-security", "github", "alice-security"),
+        ("Instagram alice_98", "instagram", "alice_98"),
+    ],
+)
+def test_an_attached_mention_is_still_a_reference(
+    bio: str, platform: str, identifier: str
+) -> None:
+    """The fix must not cost us the references that matter."""
+    assert (platform, identifier) in {
+        (reference.platform, reference.identifier)
+        for reference in extract_references(bio, [])
+    }
+
+
+@pytest.mark.parametrize(
+    "url,expected",
+    [
+        ("https://bsky.app/profile/alice.dev", ("bluesky", "alice.dev")),
+        ("https://news.ycombinator.com/user?id=alice", ("hackernews", "alice")),
+        ("https://keybase.io/alice", ("keybase", "alice")),
+        ("https://dev.to/alice", ("devto", "alice")),
+        # Not profiles: a starter pack, a story, a listing page.
+        ("https://bsky.app/starter-pack/xyz123", None),
+        ("https://news.ycombinator.com/item?id=123", None),
+        ("https://news.ycombinator.com/newest", None),
+        ("https://bsky.app/profile", None),
+    ],
+)
+def test_profile_urls_for_the_live_sources(url: str, expected) -> None:
+    """These platforms put the account behind a fixed prefix or a query param.
+
+    Reading the first path segment instead yields entities like
+    ``bluesky:starter-pack`` and ``hackernews:item``.
+    """
+    assert parse_profile_url(url) == expected

@@ -123,9 +123,10 @@ def build_demo_profiles() -> dict[tuple[str, str], ObservedProfile]:
             ],
             metadata={"identity_links": ["https://github.com/alice-security"]},
         ),
-        # GitHub, Reddit and X have no live adapter yet.  In demo mode they are
-        # served synthetically so correlation across a not-yet-adapted platform
-        # can be demonstrated end to end.
+        # GitHub and Reddit have live adapters; X does not.  All three are
+        # served synthetically here so the demo runs identically with no
+        # network, and so correlation across a not-yet-adapted platform (X) is
+        # demonstrated end to end.
         _profile(
             platform="github",
             identifier="alice-security",

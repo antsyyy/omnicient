@@ -5,6 +5,11 @@ here logs in, replays a session, calls a private endpoint or works around a
 block: if the page is not publicly readable the adapter returns a structured
 error (``PRIVATE``, ``BLOCKED``, ``RATE_LIMITED`` …) and the investigation
 continues with the evidence it already has.
+
+Instagram publishes ``Disallow: /``, so reaching this adapter at all requires
+the operator to set ``OMNICIENT_RESPECT_ROBOTS=false``.  That is their decision
+and their responsibility; the adapter itself neither knows nor changes how the
+fetch was authorised.
 """
 
 from __future__ import annotations
@@ -16,10 +21,27 @@ from .base import ObservedProfile, OpenGraphProfileAdapter
 
 # "Alice Doe (@alice_98) • Instagram photos and videos"
 TITLE_RE = re.compile(r"^(?P<name>.*?)\s*\(@(?P<handle>[^)]+)\)")
-# '... 45 Posts - Alice Doe (@alice_98) on Instagram: "bio text"'
+
+# The real biography is the quoted tail of the ``description`` meta tag:
+# '... - Alice Doe (@alice_98) on Instagram: "bio text"'
 DESCRIPTION_BIO_RE = re.compile(
     r'on Instagram:\s*[\"“](?P<bio>.*?)[\"”]\s*$', re.DOTALL
 )
+
+# "104M Followers, 95 Following, 4,914 Posts - ..." — the audience preamble
+# Instagram prefixes to every description.
+STATS_RE = re.compile(
+    r"^\s*(?P<followers>[\d.,KMB]+)\s+Followers,\s*"
+    r"(?P<following>[\d.,KMB]+)\s+Following,\s*"
+    r"(?P<posts>[\d.,KMB]+)\s+Posts\s*-\s*",
+    re.IGNORECASE,
+)
+
+# What is left when a profile has no biography at all.
+BOILERPLATE = re.compile(
+    r"^See Instagram photos and videos from .*$", re.IGNORECASE | re.DOTALL
+)
+
 # The public profile payload embeds the link-in-bio target.
 EXTERNAL_URL_RE = re.compile(r'"external_url"\s*:\s*"(?P<url>https?:[^"]+)"')
 
@@ -38,11 +60,45 @@ class InstagramAdapter(OpenGraphProfileAdapter):
         return super().extract_display_name(title)
 
     def extract_bio(self, meta: dict[str, str], html: str) -> str | None:
-        description = meta.get("og:description") or meta.get("description") or ""
-        match = DESCRIPTION_BIO_RE.search(description)
-        if match:
-            return match.group("bio").strip() or None
-        return description.strip() or None
+        """Return the biography, never the follower counts.
+
+        Instagram prefixes every description with "N Followers, N Following,
+        N Posts - ". Leaving that in place would make two unrelated accounts
+        look like they share a biography, so the counts are stripped here and
+        recorded as metadata instead.
+        """
+        # ``description`` carries the quoted bio; ``og:description`` usually
+        # does not, so both are tried rather than just the first present.
+        for key in ("description", "og:description"):
+            value = meta.get(key)
+            if not value:
+                continue
+            match = DESCRIPTION_BIO_RE.search(value)
+            if match:
+                bio = match.group("bio").strip()
+                if bio:
+                    return bio
+
+        for key in ("og:description", "description"):
+            value = meta.get(key)
+            if not value:
+                continue
+            remainder = STATS_RE.sub("", value).strip()
+            if remainder and not BOILERPLATE.match(remainder):
+                return remainder
+        return None
+
+    def extract_metadata(self, meta: dict[str, str], html: str) -> dict[str, str]:
+        """Follower/following/post counts, as published on the profile."""
+        for key in ("og:description", "description"):
+            match = STATS_RE.match(meta.get(key) or "")
+            if match:
+                return {
+                    "followers": match.group("followers"),
+                    "following": match.group("following"),
+                    "posts": match.group("posts"),
+                }
+        return {}
 
     def extract_links(
         self, meta: dict[str, str], html: str, bio: str | None

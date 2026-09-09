@@ -10,7 +10,7 @@ from __future__ import annotations
 
 import re
 from dataclasses import dataclass
-from urllib.parse import urlparse
+from urllib.parse import parse_qs, urlparse
 
 from .normalization import (
     PLATFORM_HOSTS,
@@ -28,7 +28,19 @@ PROFILE_PATH_PREFIXES: dict[str, tuple[str, ...]] = {
     "linkedin": ("in", "company", "school", "pub"),
     "youtube": ("c", "channel", "user"),
     "facebook": ("people",),
+    "hackernews": ("user",),
+    "bluesky": ("profile",),
+    "devto": (),
 }
+
+#: Platforms whose profile URLs *always* carry the prefix above.  Without this,
+#: ``bsky.app/starter-pack/xyz`` reads as the account ``starter-pack`` and
+#: ``news.ycombinator.com/item?id=1`` reads as the account ``item``.
+PROFILE_PATH_REQUIRED: frozenset[str] = frozenset({"bluesky", "hackernews"})
+
+#: Platforms that name the account in a query parameter rather than the path,
+#: e.g. ``news.ycombinator.com/user?id=alice``.
+PROFILE_QUERY_PARAM: dict[str, str] = {"hackernews": "id"}
 
 URL_RE = re.compile(r"https?://[^\s<>\"')\]]+", re.IGNORECASE)
 BARE_DOMAIN_RE = re.compile(
@@ -52,18 +64,41 @@ MENTION_WORDS: dict[str, str] = {
     "fb": "facebook",
     "github": "github",
     "reddit": "reddit",
+    "keybase": "keybase",
+    "bluesky": "bluesky",
+    "bsky": "bluesky",
     "twitter": "x",
     "linkedin": "linkedin",
     "youtube": "youtube",
     "mastodon": "mastodon",
 }
 
+# "Threads: @alice_dev" and "GitHub - alice" attach a handle to a platform with
+# a separator or an "@".  "Follow my Instagram account for updates" does not -
+# it is prose, and reading ``instagram:for`` out of it plants a junk node in
+# every graph.  The joiner is captured so bare adjacency ("GitHub alice-sec")
+# can be held to the stricter test in :func:`_looks_like_handle`.
 MENTION_RE = re.compile(
     r"\b(?P<word>" + "|".join(sorted(MENTION_WORDS, key=len, reverse=True)) + r")\b"
-    r"\s*(?:handle|profile|account|page|user(?:name)?)?\s*[:\-–>/]*\s*"
-    r"@?(?P<handle>[A-Za-z0-9._-]{2,64})",
+    r"\s*(?:handle|profile|account|page|user(?:name)?)?\s*"
+    r"(?P<joiner>[:\-–>/]+\s*@?|@)?\s*"
+    r"(?P<handle>[A-Za-z0-9._-]{2,64})",
     re.IGNORECASE,
 )
+
+# Characters that mark a token as a handle rather than an English word.
+_HANDLE_MARKERS = re.compile(r"[._\-0-9]")
+
+
+def _looks_like_handle(value: str) -> bool:
+    """Whether an unattached token is plausibly a handle.
+
+    Only applied when nothing joined the token to the platform word. A handle
+    almost always carries a digit, dot, underscore or hyphen; a bare lowercase
+    word after a platform name is far more likely to be the next word of a
+    sentence.
+    """
+    return bool(_HANDLE_MARKERS.search(value))
 
 # "Security engineer at Acme Labs", "Researcher @ Contoso Security"
 # A period ends the candidate: "at Contoso Labs. Threads: @alice" must not
@@ -130,9 +165,21 @@ def parse_profile_url(url: str | None) -> tuple[str, str] | None:
     prefixes = PROFILE_PATH_PREFIXES.get(platform, ())
     first = segments[0].lstrip("@").lower()
     if first in prefixes:
-        if len(segments) < 2:
+        param = PROFILE_QUERY_PARAM.get(platform)
+        if param:
+            # ``news.ycombinator.com/user?id=alice``
+            values = parse_qs(parsed.query).get(param) or []
+            if not values:
+                return None
+            raw = values[0]
+        elif len(segments) < 2:
             return None
-        raw = segments[1]
+        else:
+            raw = segments[1]
+    elif platform in PROFILE_PATH_REQUIRED:
+        # The prefix is mandatory for this platform, so this is some other
+        # kind of page - not an account.
+        return None
     elif first in RESERVED_PATHS:
         return None
     else:
@@ -261,6 +308,10 @@ def extract_references(
         # Trailing sentence punctuation is not part of a handle:
         # "Threads: @alice_dev." refers to @alice_dev.
         handle = match.group("handle").strip("._-")
+        # Nothing joined this token to the platform word, so it has to look
+        # like a handle on its own merits.
+        if not match.group("joiner") and not _looks_like_handle(handle):
+            continue
         platform = normalize_platform(MENTION_WORDS[match.group("word").lower()])
         lowered = handle.lower()
         if platform is None or lowered in RESERVED_PATHS or lowered in _TLD_LIKE:
