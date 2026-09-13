@@ -608,6 +608,22 @@ identifier)`, and honours `robots.txt` where it is available.
 Measured, not assumed — each platform's robots.txt was checked against
 Omnicient's user agent, and every permitted endpoint was then probed:
 
+**24 adapters across six categories**, every one checked against its
+robots.txt before it was written:
+
+| Category | Sources |
+| --- | --- |
+| **Developer** | GitHub, DEV, Hacker News, Hugging Face, Stack Overflow, crates.io, Docker Hub, Launchpad |
+| **Social** | Mastodon, Bluesky, Telegram, Medium (+ Instagram, Reddit, Threads, Facebook below) |
+| **Gaming** | Steam |
+| **Music** | SoundCloud, Last.fm |
+| **Learning** | Codewars, Scratch, Duolingo |
+| **Identity** | Keybase |
+| **Web** | any site, robots permitting |
+
+Adapters declare a `SourceCategory`, so `/api/health` reports coverage grouped
+rather than as a flat list of two dozen platform names.
+
 | Source | Live? | Endpoint |
 | --- | --- | --- |
 | GitHub | ✅ | `api.github.com/users/{u}` — documented, anonymous |
@@ -615,12 +631,26 @@ Omnicient's user agent, and every permitted endpoint was then probed:
 | Mastodon | ✅ | `/api/v1/accounts/lookup` on an allow-listed instance |
 | Bluesky | ✅ | `public.api.bsky.app` AT Protocol appview |
 | DEV | ✅ | `dev.to/api/users/by_username` |
+| Hacker News | ✅ | `hacker-news.firebaseio.com/v0/user/{u}.json` |
+| Hugging Face | ✅ | `huggingface.co/api/users/{u}/overview` |
+| Stack Overflow | ✅ | Stack Exchange API — searched by display name |
+| crates.io | ✅ | `crates.io/api/v1/users/{u}` — GitHub-backed |
+| Docker Hub | ✅ | `hub.docker.com/v2/users/{u}/` |
+| Launchpad | ✅ | `api.launchpad.net/1.0/~{u}` |
+| Steam | ✅ | `steamcommunity.com/id/{u}/?xml=1` |
+| SoundCloud / Last.fm | ✅ | Open Graph card on the profile page |
+| Codewars / Scratch / Duolingo | ✅ | documented public JSON |
+| Telegram / Medium | ✅ | Open Graph card |
 | Websites | ✅ | the page itself, robots permitting |
 | Instagram | robots off | `Disallow: /`, but the public profile parses |
 | Facebook | robots off | `Disallow: /`, but public pages parse |
 | Threads | robots off | `Disallow: /`, but the public profile parses |
 | Reddit | ❌ | `Disallow: /` — and HTTP 403 to non-browser clients |
-| GitLab, Codeberg, Gravatar, Lobsters | ❌ | `Disallow:` on the API path |
+| GitLab, Codeberg, Gitee, Gravatar, Lobsters | ❌ | `Disallow:` on the API path |
+| Speedrun, Chess.com, Lichess, HackerRank | ❌ | `Disallow:` — gaming and learning |
+| Genius, MusicBrainz, Mixcloud | ❌ | `Disallow:` — music |
+| Pinterest, Flickr, Patreon, Linktree | ❌ | `Disallow:` — social |
+| LeetCode, Exercism, NameMC | ❌ | HTTP 403 to non-browser clients |
 
 **"robots off"** means the source is reachable only when the operator sets
 `OMNICIENT_RESPECT_ROBOTS=false`. Nothing else changes: Omnicient still sends
@@ -786,9 +816,11 @@ omnicient/
 │   │   ├── services/           crawler, discovery, correlation,
 │   │   │                       alias_detection, identity_profile, paths,
 │   │   │                       leads, graph, investigation (orchestration)
-│   │   ├── sources/            base + github, keybase, mastodon, bluesky,
-│   │   │                       devto, website, instagram, reddit, threads,
-│   │   │                       facebook
+│   │   ├── sources/            base + per-platform adapters (github,
+│   │   │                       keybase, mastodon, bluesky, devto, website,
+│   │   │                       instagram, reddit, threads, facebook) and
+│   │   │                       category modules (dev, gaming, music,
+│   │   │                       learning, social)
 │   │   └── utils/              identifier, normalization, url_parser,
 │   │                           validation, logging
 │   ├── tests/                  identifier, normalization, url_parser,
@@ -886,7 +918,7 @@ possible later without a migration.
 ```bash
 cd backend
 source .venv/bin/activate
-pytest              # 269 tests
+pytest              # 301 tests
 ruff check .        # lint
 ```
 

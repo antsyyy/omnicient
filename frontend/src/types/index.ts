@@ -59,6 +59,9 @@ export interface Health {
   database: { engine: string; connected: boolean; error: string | null }
   demo_seed: { platform: string; identifier: string }
   sources: string[]
+  /** Sources grouped by the kind of site they read. */
+  sources_by_category: Record<string, string[]>
+  source_count: number
   demo_sources: string[]
   crawler: {
     max_depth: number

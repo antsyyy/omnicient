@@ -19,16 +19,30 @@ from .base import (
     OpenGraphProfileAdapter,
     SafeFetcher,
     SourceAdapter,
+    SourceCategory,
     SourceError,
+    XmlProfileAdapter,
 )
 from .bluesky import BlueskyAdapter
+from .dev import (
+    CratesIoAdapter,
+    DockerHubAdapter,
+    HackerNewsAdapter,
+    HuggingFaceAdapter,
+    LaunchpadAdapter,
+    StackOverflowAdapter,
+)
 from .devto import DevToAdapter
 from .facebook import FacebookAdapter
+from .gaming import SteamAdapter
 from .github import GitHubAdapter
 from .instagram import InstagramAdapter
 from .keybase import KeybaseAdapter
+from .learning import CodewarsAdapter, DuolingoAdapter, ScratchAdapter
 from .mastodon import MastodonAdapter
+from .music import LastFmAdapter, SoundCloudAdapter
 from .reddit import RedditAdapter
+from .social import MediumAdapter, TelegramAdapter
 from .threads import ThreadsAdapter
 from .website import WebsiteAdapter
 
@@ -38,12 +52,32 @@ logger = get_logger(__name__)
 #: Mastodon, GitLab) are registered here and nowhere else.
 ADAPTER_CLASSES: tuple[type[SourceAdapter], ...] = (
     # Sources whose robots.txt permits anonymous lookups, so they work live.
-    GitHubAdapter,
+    # Identity and general web.
     KeybaseAdapter,
+    WebsiteAdapter,
+    # Developer platforms.
+    GitHubAdapter,
+    DevToAdapter,
+    HackerNewsAdapter,
+    HuggingFaceAdapter,
+    StackOverflowAdapter,
+    CratesIoAdapter,
+    DockerHubAdapter,
+    LaunchpadAdapter,
+    # Social.
     MastodonAdapter,
     BlueskyAdapter,
-    DevToAdapter,
-    WebsiteAdapter,
+    TelegramAdapter,
+    MediumAdapter,
+    # Gaming.
+    SteamAdapter,
+    # Music.
+    SoundCloudAdapter,
+    LastFmAdapter,
+    # Learning.
+    CodewarsAdapter,
+    ScratchAdapter,
+    DuolingoAdapter,
     # Sources that publish "Disallow: /" for everything.  Kept registered so a
     # discovered link still becomes a node and the refusal is reported, rather
     # than the platform silently vanishing from the investigation.
@@ -95,8 +129,35 @@ def build_registry(
     return registry
 
 
+#: Adapters grouped by the kind of site they read, for the health endpoint
+#: and anything else that wants to describe coverage rather than list it.
+def adapters_by_category() -> dict[str, list[str]]:
+    """``{"dev": ["github", "devto", ...], ...}`` across registered adapters."""
+    grouped: dict[str, list[str]] = {}
+    for adapter in ADAPTER_CLASSES:
+        grouped.setdefault(str(adapter.category), []).append(adapter.platform)
+    return {key: sorted(value) for key, value in sorted(grouped.items())}
+
+
 __all__ = [
     "ADAPTER_CLASSES",
+    "CodewarsAdapter",
+    "CratesIoAdapter",
+    "DockerHubAdapter",
+    "DuolingoAdapter",
+    "HackerNewsAdapter",
+    "HuggingFaceAdapter",
+    "LastFmAdapter",
+    "LaunchpadAdapter",
+    "MediumAdapter",
+    "ScratchAdapter",
+    "SoundCloudAdapter",
+    "SourceCategory",
+    "StackOverflowAdapter",
+    "SteamAdapter",
+    "TelegramAdapter",
+    "XmlProfileAdapter",
+    "adapters_by_category",
     "BlueskyAdapter",
     "DevToAdapter",
     "FacebookAdapter",

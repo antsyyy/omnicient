@@ -71,6 +71,23 @@ REASON_MESSAGES: dict[str, str] = {
 }
 
 
+class SourceCategory(StrEnum):
+    """What kind of site a source is.
+
+    Grouping sources lets the interface and the profile say "four developer
+    accounts and a music profile" rather than listing nine platform names, and
+    it keeps the adapter registry legible as it grows.
+    """
+
+    SOCIAL = "social"
+    DEV = "dev"
+    GAMING = "gaming"
+    MUSIC = "music"
+    LEARNING = "learning"
+    WEB = "web"
+    IDENTITY = "identity"
+
+
 class SourceError(Exception):
     """A structured, non-fatal source failure."""
 
@@ -396,6 +413,8 @@ class SourceAdapter(ABC):
     platform: str = ""
     #: Human-readable name used in evidence descriptions and events.
     name: str = ""
+    #: Which kind of site this is, for grouping in the UI and the profile.
+    category: SourceCategory = SourceCategory.SOCIAL
 
     @abstractmethod
     async def lookup(self, identifier: str) -> LookupResult:
@@ -457,20 +476,33 @@ def looks_like_login_wall(html: str) -> bool:
     return any(marker in lowered for marker in LOGIN_WALL_MARKERS)
 
 
-def page_is_profile_for(meta: dict[str, str], identifier: str) -> bool:
+def page_is_profile_for(
+    meta: dict[str, str], identifier: str, platform: str | None = None
+) -> bool:
     """Check that a fetched page really is the requested profile.
 
     Meta platforms answer an unknown or gated handle with HTTP 200 and a
     generic page whose canonical URL points at that interstitial, so comparing
     the advertised canonical against the requested handle filters them out
     without guessing from page text.
+
+    ``platform`` lets the check skip a known profile prefix: last.fm publishes
+    ``/user/rj``, so comparing the first path segment alone would reject every
+    profile on the site.
     """
+    from ..utils.url_parser import PROFILE_PATH_PREFIXES
+
     url = meta.get("og:url") or meta.get("canonical")
     if not url:
         return True  # Nothing to verify against; other checks still apply.
     segments = [s for s in urlparse(url).path.split("/") if s]
     if not segments:
         return False
+
+    prefixes = PROFILE_PATH_PREFIXES.get(platform or "", ())
+    if len(segments) > 1 and segments[0].lower() in prefixes:
+        segments = segments[1:]
+
     first = segments[0].lstrip("@").lower()
     if first in NON_PROFILE_PATHS:
         return False
@@ -628,7 +660,7 @@ class OpenGraphProfileAdapter(SourceAdapter):
         title = meta.get("og:title")
         if not title:
             return None
-        if not page_is_profile_for(meta, identifier):
+        if not page_is_profile_for(meta, identifier, self.platform):
             return None
 
         display_name = self.extract_display_name(title)
@@ -722,12 +754,23 @@ class JsonProfileAdapter(SourceAdapter):
     def api_url(self, identifier: str) -> str:
         return self.api_template.format(identifier=identifier)
 
+    def normalize_identifier(self, identifier: str) -> str:
+        """Canonicalise the identifier before it is looked up.
+
+        Overridable because not every platform is keyed by a handle: Stack
+        Exchange has only display names, which contain spaces that the handle
+        normalizer rejects outright.
+        """
+        from ..utils.normalization import normalize_username
+
+        return normalize_username(identifier)
+
     async def lookup(self, identifier: str) -> LookupResult:
         """Fetch and parse a public profile document."""
-        from ..utils.normalization import NormalizationError, normalize_username
+        from ..utils.normalization import NormalizationError
 
         try:
-            identifier = normalize_username(identifier)
+            identifier = self.normalize_identifier(identifier)
         except NormalizationError as exc:
             return LookupResult.failure(SourceError(FailureReason.NOT_FOUND, str(exc)))
 
@@ -779,3 +822,83 @@ class JsonProfileAdapter(SourceAdapter):
         self, identifier: str, payload: Any, url: str
     ) -> ObservedProfile | None:
         """Build an :class:`ObservedProfile` from the public JSON document."""
+
+
+class XmlProfileAdapter(SourceAdapter):
+    """Adapter for platforms that publish a public profile as XML.
+
+    Steam is the notable one: appending ``?xml=1`` to a community profile
+    returns a small, stable document instead of a 200KB page built by
+    JavaScript. Reading that is both lighter and more reliable than scraping
+    the rendered profile.
+    """
+
+    #: Public XML endpoint, formatted with ``identifier``.
+    api_template: str = ""
+    #: Human-facing profile URL, formatted with ``identifier``.
+    url_template: str = ""
+    accept: str = "text/xml,application/xml"
+
+    def __init__(self, fetcher: SafeFetcher | None = None) -> None:
+        self.fetcher = fetcher or SafeFetcher()
+
+    def profile_url(self, identifier: str) -> str:
+        return self.url_template.format(identifier=identifier)
+
+    def api_url(self, identifier: str) -> str:
+        return self.api_template.format(identifier=identifier)
+
+    async def lookup(self, identifier: str) -> LookupResult:
+        """Fetch and parse a public XML profile document."""
+        from ..utils.normalization import NormalizationError, normalize_username
+
+        try:
+            identifier = normalize_username(identifier)
+        except NormalizationError as exc:
+            return LookupResult.failure(SourceError(FailureReason.NOT_FOUND, str(exc)))
+
+        api_url = self.api_url(identifier)
+        try:
+            fetched = await self.fetcher.get(api_url, headers={"Accept": self.accept})
+        except SourceError as exc:
+            logger.info(
+                "source_unavailable platform=%s identifier=%s reason=%s",
+                self.platform,
+                identifier,
+                exc.reason,
+            )
+            return LookupResult.failure(exc)
+
+        try:
+            soup = BeautifulSoup(fetched.text, "lxml-xml")
+            profile = self.parse_xml(identifier, soup, self.profile_url(identifier))
+        except Exception as exc:  # noqa: BLE001 - malformed XML must not abort
+            logger.warning(
+                "parse_failed platform=%s identifier=%s error=%s",
+                self.platform,
+                identifier,
+                exc,
+            )
+            return LookupResult.failure(
+                SourceError(FailureReason.PARSE_ERROR, str(exc), api_url),
+                pages_fetched=1,
+            )
+
+        if profile is None:
+            return LookupResult(pages_fetched=1, url=api_url)
+        return LookupResult(entities=[profile], pages_fetched=1, url=api_url)
+
+    @abstractmethod
+    def parse_xml(
+        self, identifier: str, soup: BeautifulSoup, url: str
+    ) -> ObservedProfile | None:
+        """Build an :class:`ObservedProfile` from the parsed XML document."""
+
+
+def xml_text(soup: BeautifulSoup, tag: str) -> str | None:
+    """Trimmed text of the first matching element, or ``None``."""
+    element = soup.find(tag)
+    if element is None:
+        return None
+    value = element.get_text(strip=True)
+    return value or None

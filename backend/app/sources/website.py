@@ -30,6 +30,7 @@ from .base import (
     ObservedProfile,
     SafeFetcher,
     SourceAdapter,
+    SourceCategory,
     SourceError,
     absolute_links,
     enrich_profile,
@@ -48,6 +49,7 @@ class WebsiteAdapter(SourceAdapter):
 
     platform = "website"
     name = "Website"
+    category = SourceCategory.WEB
 
     def __init__(self, fetcher: SafeFetcher | None = None) -> None:
         self.fetcher = fetcher or SafeFetcher()

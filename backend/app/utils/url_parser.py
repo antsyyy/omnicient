@@ -30,13 +30,22 @@ PROFILE_PATH_PREFIXES: dict[str, tuple[str, ...]] = {
     "facebook": ("people",),
     "hackernews": ("user",),
     "bluesky": ("profile",),
+    "steam": ("id", "profiles"),
+    "scratch": ("users",),
+    "duolingo": ("profile",),
+    "lastfm": ("user",),
+    "dockerhub": ("u",),
+    "crates": ("users",),
+    "codewars": ("users",),
     "devto": (),
 }
 
 #: Platforms whose profile URLs *always* carry the prefix above.  Without this,
 #: ``bsky.app/starter-pack/xyz`` reads as the account ``starter-pack`` and
 #: ``news.ycombinator.com/item?id=1`` reads as the account ``item``.
-PROFILE_PATH_REQUIRED: frozenset[str] = frozenset({"bluesky", "hackernews"})
+PROFILE_PATH_REQUIRED: frozenset[str] = frozenset(
+    {"bluesky", "hackernews", "steam", "scratch", "lastfm", "dockerhub", "crates"}
+)
 
 #: Platforms that name the account in a query parameter rather than the path,
 #: e.g. ``news.ycombinator.com/user?id=alice``.
@@ -163,7 +172,8 @@ def parse_profile_url(url: str | None) -> tuple[str, str] | None:
         return None
 
     prefixes = PROFILE_PATH_PREFIXES.get(platform, ())
-    first = segments[0].lstrip("@").lower()
+    # Sigils platforms put in front of a handle: "@alice", "~alice".
+    first = segments[0].lstrip("@~").lower()
     if first in prefixes:
         param = PROFILE_QUERY_PARAM.get(platform)
         if param:
@@ -186,7 +196,7 @@ def parse_profile_url(url: str | None) -> tuple[str, str] | None:
         raw = segments[0]
 
     try:
-        return platform, normalize_username(raw)
+        return platform, normalize_username(raw.lstrip("~"))
     except NormalizationError:
         return None
 

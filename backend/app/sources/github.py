@@ -19,7 +19,7 @@ from __future__ import annotations
 
 from typing import Any
 
-from .base import JsonProfileAdapter, ObservedProfile, enrich_profile
+from .base import JsonProfileAdapter, ObservedProfile, SourceCategory, enrich_profile
 
 
 class GitHubAdapter(JsonProfileAdapter):
@@ -27,6 +27,7 @@ class GitHubAdapter(JsonProfileAdapter):
 
     platform = "github"
     name = "GitHub"
+    category = SourceCategory.DEV
     api_template = "https://api.github.com/users/{identifier}"
     url_template = "https://github.com/{identifier}"
     # GitHub's documented versioned media type; a plain HTML Accept is refused

@@ -8,7 +8,7 @@ from ..config import get_settings
 from ..database import check_connection, get_repository
 from ..demo_data import DEMO_SEED_IDENTIFIER, DEMO_SEED_PLATFORM, demo_platforms
 from ..repository import Neo4jRepository
-from ..sources import ADAPTER_CLASSES
+from ..sources import ADAPTER_CLASSES, adapters_by_category
 
 router = APIRouter(tags=["health"])
 
@@ -41,6 +41,10 @@ def health() -> dict:
             "identifier": DEMO_SEED_IDENTIFIER,
         },
         "sources": [adapter.platform for adapter in ADAPTER_CLASSES],
+        # Grouped so a client can say "8 developer sources" rather than
+        # listing two dozen platform names.
+        "sources_by_category": adapters_by_category(),
+        "source_count": len(ADAPTER_CLASSES),
         "demo_sources": demo_platforms(),
         "crawler": {
             "max_depth": settings.max_depth,
