@@ -138,6 +138,49 @@ TRACKING_PARAMS: frozenset[str] = frozenset(
 
 USERNAME_RE = re.compile(r"^[A-Za-z0-9._\-]{1,64}$")
 
+#: Generic top-level domains common enough to be worth recognising by name.
+#:
+#: Every country-code TLD is exactly two letters, so those are matched by
+#: length instead of being listed. The point of the set is to tell a domain
+#: from a dotted handle: "alice.dev" is a site, "firstname.lastname" is a
+#: person's handle, and the only thing separating them is whether the last
+#: label is a real TLD.
+KNOWN_GTLDS: frozenset[str] = frozenset(
+    {
+        "com", "net", "org", "edu", "gov", "mil", "int", "info", "biz",
+        "name", "pro", "mobi", "asia", "tel", "xxx", "aero", "coop", "jobs",
+        "museum", "travel", "cat", "post",
+        # Newer generics people actually use for personal sites.
+        "app", "art", "bio", "blog", "cloud", "club", "codes", "dev", "digital",
+        "design", "email", "fyi", "games", "gg", "guru", "host", "icu", "ink",
+        "io", "link", "live", "ltd", "media", "network", "news", "ninja",
+        "online", "page", "photo", "photography", "pics", "press", "pub",
+        "rocks", "run", "shop", "show", "site", "social", "software", "space",
+        "store", "studio", "style", "tech", "today", "tools", "top", "tv",
+        "wiki", "work", "works", "world", "wtf", "xyz", "zone",
+    }
+)
+
+
+def looks_like_domain(value: str | None) -> bool:
+    """Whether a dotted string is a hostname rather than a handle.
+
+    ``alice.dev`` is a domain; ``firstname.lastname`` is a username that
+    happens to contain a dot. Treating every dotted string as a hostname sends
+    the crawler looking for a site that does not exist and loses the account
+    that does.
+    """
+    if not value:
+        return False
+    labels = value.strip().strip(".").lower().split(".")
+    if len(labels) < 2 or not all(labels):
+        return False
+    if not all(re.fullmatch(r"[a-z0-9](?:[a-z0-9-]*[a-z0-9])?", part) for part in labels):
+        return False
+    tld = labels[-1]
+    # Two letters is a country code; anything longer has to be a known generic.
+    return (len(tld) == 2 and tld.isalpha()) or tld in KNOWN_GTLDS
+
 # Schemes that are never fetchable web pages.
 NON_WEB_SCHEMES = (
     "mailto:", "javascript:", "tel:", "data:", "file:", "ftp:", "ws:", "wss:",
@@ -205,8 +248,11 @@ def normalize_username(value: str | None) -> str:
 
     candidate = candidate.strip().strip("/").lstrip("@").strip()
     candidate = candidate.split("?", 1)[0].split("#", 1)[0]
-    # Separators are meaningful inside a handle but never at its edges.
-    candidate = candidate.strip("._-").lower()
+    # A trailing dot or hyphen is punctuation picked up during extraction
+    # ("Threads: @alice_dev." -> "alice_dev"). An underscore is not: "_alice"
+    # and "alice_" are handles in their own right on most platforms, and
+    # stripping one silently queries a different account.
+    candidate = candidate.strip(".-").lower()
 
     if not USERNAME_RE.match(candidate):
         raise NormalizationError(f"invalid identifier: {value!r}")

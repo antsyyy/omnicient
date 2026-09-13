@@ -28,6 +28,7 @@ from urllib.parse import urlparse
 
 from .normalization import (
     NormalizationError,
+    looks_like_domain,
     normalize_domain,
     normalize_platform,
     normalize_url,
@@ -46,7 +47,11 @@ DOMAIN_RE = re.compile(
 )
 
 #: Usernames as the supported platforms allow them.
-USERNAME_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._-]{0,63}$")
+#:
+#: A leading underscore is deliberately allowed: "_alice" is a perfectly
+#: ordinary handle on Instagram, X and TikTok, and requiring an alphanumeric
+#: first character rejected every one of them outright.
+USERNAME_RE = re.compile(r"^[A-Za-z0-9_][A-Za-z0-9._-]{0,63}$")
 
 
 class IdentifierType(StrEnum):
@@ -133,8 +138,9 @@ def detect_identifier(value: str | None) -> DetectedIdentifier:
     if _looks_like_url(raw):
         return _classify_url(raw)
 
-    # 3. A bare hostname.
-    if DOMAIN_RE.match(raw):
+    # 3. A bare hostname - but only when the last label is a real TLD.
+    #    "firstname.lastname" is a handle, not a site.
+    if DOMAIN_RE.match(raw) and looks_like_domain(raw):
         domain = normalize_domain(raw)
         if domain:
             return DetectedIdentifier(

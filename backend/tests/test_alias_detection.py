@@ -34,9 +34,19 @@ def evidence(kind: EvidenceType, weight: float, supports: bool = True) -> Eviden
 
 @pytest.mark.parametrize(
     "value,expected",
-    [("  Alice_98 ", "alice_98"), ("_alice-", "alice"), ("ALICE.SEC", "alice.sec")],
+    [
+        ("  Alice_98 ", "alice_98"),
+        ("ALICE.SEC", "alice.sec"),
+        # A trailing dot or hyphen is punctuation from extraction...
+        ("alice-", "alice"),
+        ("alice.", "alice"),
+        # ...but an underscore is part of the handle.
+        ("_alice", "_alice"),
+        ("alice_", "alice_"),
+    ],
 )
 def test_normalize_alias_candidate(value: str, expected: str) -> None:
+    """One edge rule, shared with normalize_username."""
     assert normalize_alias_candidate(value) == expected
 
 
@@ -188,3 +198,35 @@ def test_detect_runs_over_the_demo_dataset() -> None:
     assert near_miss.strength is AliasStrength.STRONG   # the handles do resemble
     assert near_miss.confidence == "LOW"                # the evidence does not
     assert near_miss.contradicting_evidence
+
+
+@pytest.mark.parametrize(
+    "a,b,expected",
+    [
+        ("_alice", "alice", Transformation.SEPARATOR_REMOVED),
+        ("alice_", "alice", Transformation.SEPARATOR_REMOVED),
+        ("_alice_98", "alice_98", Transformation.SEPARATOR_SUBSTITUTION),
+        ("firstname.lastname", "firstname_lastname",
+         Transformation.SEPARATOR_SUBSTITUTION),
+        ("john.smith", "johnsmith", Transformation.SEPARATOR_REMOVED),
+    ],
+)
+def test_edge_separators_are_a_variant_not_the_same_handle(
+    a: str, b: str, expected: Transformation
+) -> None:
+    """"_alice" and "alice" are different accounts.
+
+    Folding them together in normalization made the detector call them one
+    handle, so the transformation an analyst most wants to see went
+    unreported.
+    """
+    assert str(expected) in detect_transformations(a, b)
+    candidate = AliasDetector().compare(a, b)
+    assert candidate is not None
+    assert candidate.strength is AliasStrength.STRONG
+
+
+def test_dotted_names_still_resist_false_positives() -> None:
+    """A shared surname is not a transformation."""
+    assert AliasDetector().compare("john.smith", "jane.smith") is None
+    assert AliasDetector().compare("_alice", "_bob") is None
