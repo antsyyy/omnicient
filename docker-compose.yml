@@ -53,7 +53,7 @@ services:
       # live public sources.
       OMNICIENT_DEMO_MODE: "true"
       OMNICIENT_MAX_DEPTH: "2"
-      OMNICIENT_MAX_PAGES: "50"
+      OMNICIENT_MAX_PAGES: "150"
       OMNICIENT_REQUEST_DELAY: "1.0"
       OMNICIENT_CORS_ORIGINS: "http://localhost:5173,http://127.0.0.1:5173"
     ports:

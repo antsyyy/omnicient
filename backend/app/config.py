@@ -166,9 +166,20 @@ class Settings:
         default_factory=lambda: _env_int("OMNICIENT_PATH_RESULT_CEILING", 25)
     )
 
+    #: Sources fetched at once within one crawl level.  A fan-out across two
+    #: dozen different hosts has no reason to be sequential; the per-host
+    #: delay still serialises repeat requests to any single service.
+    crawl_concurrency: int = field(
+        default_factory=lambda: _env_int("OMNICIENT_CRAWL_CONCURRENCY", 10)
+    )
+
     # Crawler budget (section 15 of the specification).
     max_depth: int = field(default_factory=lambda: _env_int("OMNICIENT_MAX_DEPTH", 2))
-    max_pages: int = field(default_factory=lambda: _env_int("OMNICIENT_MAX_PAGES", 50))
+    #: Raised from 50 when the catalogue grew to two dozen sources: a bare
+    #: username fans out to 23 lookups before a single reference is followed,
+    #: so the old budget truncated every such crawl - and which lookups
+    #: survived depended on queue order rather than on relevance.
+    max_pages: int = field(default_factory=lambda: _env_int("OMNICIENT_MAX_PAGES", 150))
     request_timeout: float = field(
         default_factory=lambda: _env_float("OMNICIENT_REQUEST_TIMEOUT", 10.0)
     )

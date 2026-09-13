@@ -219,7 +219,12 @@ class SafeFetcher:
         self._owns_client = client is None
         self._last_request: dict[str, float] = {}
         self._robots: dict[str, RobotFileParser | None] = {}
-        self._lock = asyncio.Lock()
+        # One lock per host rather than one for the fetcher. A single lock
+        # held across the politeness sleep would serialise every request the
+        # crawler makes, including to unrelated hosts - which defeats the
+        # point of fetching sources concurrently.
+        self._host_locks: dict[str, asyncio.Lock] = {}
+        self._registry_lock = asyncio.Lock()
 
     async def aclose(self) -> None:
         if self._owns_client:
@@ -354,12 +359,27 @@ class SafeFetcher:
             chunks.append(chunk)
         return b"".join(chunks).decode(response.encoding or "utf-8", errors="replace")
 
+    async def _lock_for(self, host: str) -> asyncio.Lock:
+        """The politeness lock for one host, created on first use."""
+        async with self._registry_lock:
+            lock = self._host_locks.get(host)
+            if lock is None:
+                lock = asyncio.Lock()
+                self._host_locks[host] = lock
+            return lock
+
     async def _respect_delay(self, host: str) -> None:
-        """Wait out the configured inter-request delay for a host."""
+        """Wait out the configured inter-request delay for a host.
+
+        Serialises requests to the *same* host while leaving different hosts
+        free to proceed in parallel, so politeness costs concurrency nothing
+        across a fan-out to twenty different services.
+        """
         delay = self.settings.request_delay
         if delay <= 0:
             return
-        async with self._lock:
+        lock = await self._lock_for(host)
+        async with lock:
             last = self._last_request.get(host, 0.0)
             elapsed = time.monotonic() - last
             if last and elapsed < delay:
