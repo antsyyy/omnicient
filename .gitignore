@@ -20,6 +20,12 @@ dist/
 # writes here.
 neo4j-data/
 
+# Nothing here uses SQLite any more, but checking out a pre-Neo4j commit and
+# running it regenerates this file - and without the rule it lands staged.
+backend/data/
+*.db
+*.sqlite3
+
 # Editors / OS
 .DS_Store
 .idea/
