@@ -220,6 +220,7 @@ class Crawler:
                         f"{candidate.label} could not be read: {result}",
                         level="WARNING",
                         platform=candidate.platform,
+                        identifier=candidate.identifier,
                         reason="NETWORK_ERROR",
                     )
                     continue
@@ -330,7 +331,9 @@ class Crawler:
                 "source_unavailable",
                 f"{candidate.label} could not be read: {result.detail}",
                 level="WARNING" if result.reason != FailureReason.NOT_FOUND else "INFO",
-                platform=candidate.platform, reason=str(result.reason),
+                platform=candidate.platform,
+                identifier=candidate.identifier,
+                reason=str(result.reason),
             )
             if candidate.drop_if_unresolved:
                 return None, None

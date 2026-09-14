@@ -27,12 +27,14 @@ from ..schemas.lead import LeadList
 from ..schemas.path import PathResponse
 from ..schemas.profile import IdentityProfile
 from ..schemas.relationship import RelationshipRead
+from ..schemas.results import SourceResults
 from ..services.alias_service import AliasService
 from ..services.graph import GraphService
 from ..services.identity_profile import IdentityProfileService
 from ..services.investigation import InvestigationService
 from ..services.leads import LeadService
 from ..services.paths import PathNotFoundError, PathService
+from ..services.results import ResultsService
 from ..utils.logging import get_logger
 from ..utils.normalization import NormalizationError
 
@@ -206,6 +208,24 @@ def list_relationships(
     return [
         RelationshipRead.model_validate(relationship) for relationship in relationships
     ]
+
+
+@router.get(
+    "/{investigation_id}/results",
+    response_model=SourceResults,
+    summary="What each source yielded",
+)
+def read_results(
+    investigation_id: str, repo: Neo4jRepository = Depends(get_repository)
+) -> SourceResults:
+    """One row per source: found, nothing found, or unavailable.
+
+    The graph cannot express the difference between a source that was
+    searched and came back empty and one that refused to be searched - both
+    are simply absent from it. This is where that distinction lives.
+    """
+    investigation = _get_investigation(repo, investigation_id)
+    return ResultsService(repo).build(investigation)
 
 
 @router.get(
