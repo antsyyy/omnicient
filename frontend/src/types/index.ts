@@ -23,6 +23,7 @@ export type RelationshipType =
   | 'SHARED_AVATAR'
   | 'SHARED_ATTRIBUTE'
   | 'POTENTIAL_SAME_IDENTITY'
+  | 'POTENTIAL_ALIAS'
   | 'CONTRADICTORY'
 
 export type ConfidenceLevel = 'LOW' | 'MEDIUM' | 'HIGH' | 'VERY_HIGH' | 'INSUFFICIENT'

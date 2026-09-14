@@ -57,6 +57,7 @@ export const RELATIONSHIP_TYPES: RelationshipType[] = [
   'LINKS_TO',
   'REFERENCES',
   'POTENTIAL_SAME_IDENTITY',
+  'POTENTIAL_ALIAS',
   'SHARED_WEBSITE',
   'SHARED_EMAIL',
   'SHARED_AVATAR',
@@ -74,6 +75,7 @@ export const RELATIONSHIP_LABEL: Record<RelationshipType, string> = {
   SHARED_AVATAR: 'Shared Avatar',
   SHARED_ATTRIBUTE: 'Shared Attribute',
   POTENTIAL_SAME_IDENTITY: 'Potential Same Identity',
+  POTENTIAL_ALIAS: 'Potential Alias',
   CONTRADICTORY: 'Contradictory',
 }
 
