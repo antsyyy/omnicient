@@ -15,6 +15,7 @@
 
 import { useCallback, useEffect, useMemo, useState } from 'react'
 import { api } from '../api/client'
+import PlatformLogo from './PlatformLogo'
 import type { SourceOutcome, SourceResult, SourceResults } from '../types'
 import {
   CATEGORY_LABEL,
@@ -81,14 +82,22 @@ function ResultRow({
       className="border-b border-line px-3 py-2 last:border-b-0"
       style={selected ? { background: 'var(--color-raised)' } : undefined}
     >
-      <div className="flex items-baseline gap-2">
-        <span
-          className="shrink-0 font-mono text-[9px]"
-          style={{ color: OUTCOME_COLOR[result.outcome] }}
-          aria-hidden
-        >
-          {found ? '◉' : result.outcome === 'UNAVAILABLE' ? '⊘' : '○'}
-        </span>
+      <div className="flex items-center gap-2">
+        {/*
+          The mark takes the outcome's colour rather than the brand's. A row
+          that found nothing should read as muted at a glance, and a wall of
+          brand palette would make every source look equally alive.
+        */}
+        <PlatformLogo
+          platform={result.platform}
+          entityType={result.entity?.type}
+          size={15}
+          title={result.platform_name}
+          style={{
+            color: OUTCOME_COLOR[result.outcome],
+            opacity: found ? 1 : 0.55,
+          }}
+        />
 
         <span
           className={`shrink-0 text-[12px] ${found ? 'text-ink' : 'text-dim'}`}

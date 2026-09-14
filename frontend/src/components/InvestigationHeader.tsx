@@ -11,7 +11,6 @@ interface Props {
   onResetLayout: () => void
   busy: boolean
   view: WorkspaceView
-  onViewChange: (view: WorkspaceView) => void
 }
 
 const STATUS_STYLE: Record<string, string> = {
@@ -29,7 +28,6 @@ export default function InvestigationHeader({
   onResetLayout,
   busy,
   view,
-  onViewChange,
 }: Props) {
   const running = ['CREATED', 'CRAWLING', 'ANALYZING'].includes(investigation.status)
 
@@ -63,31 +61,31 @@ export default function InvestigationHeader({
 
       <div className="flex shrink-0 items-center gap-2">
         {/*
-          Two readings of the same investigation. The list answers "what came
-          back from each source", which is the first question; the graph
-          answers "how do these connect", which is the second.
+          Two readings of the same investigation, on two routes. The results
+          answer "what came back from each source", which is the first
+          question; the graph answers "how do these connect", which is the
+          second. Separate URLs so each is linkable on its own.
         */}
-        <div className="flex overflow-hidden rounded border border-line">
+        <nav className="flex overflow-hidden rounded border border-line">
           {(
             [
-              ['list', 'Results'],
-              ['graph', 'Graph'],
+              ['list', 'Results', `/investigations/${investigation.id}`],
+              ['graph', 'Graph', `/investigations/${investigation.id}/graph`],
             ] as const
-          ).map(([id, label]) => (
-            <button
+          ).map(([id, label, to]) => (
+            <Link
               key={id}
-              onClick={() => onViewChange(id)}
-              className="px-2 py-1 font-mono text-[11px] tracking-wide"
+              to={to}
+              className="px-2.5 py-1 font-mono text-[11px] tracking-wide"
               style={{
                 color: view === id ? 'var(--color-void)' : 'var(--color-dim)',
-                background:
-                  view === id ? 'var(--color-accent)' : 'transparent',
+                background: view === id ? 'var(--color-accent)' : 'transparent',
               }}
             >
               {label}
-            </button>
+            </Link>
           ))}
-        </div>
+        </nav>
 
         {view === 'graph' && (
           <button

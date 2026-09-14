@@ -1,11 +1,11 @@
 import { useCallback, useEffect, useMemo, useState } from 'react'
-import { useParams } from 'react-router-dom'
+import { Link, useParams } from 'react-router-dom'
 import { ReactFlowProvider } from '@xyflow/react'
 import { api } from '../api/client'
 import EntityPanel from '../components/EntityPanel'
-import InvestigationCanvas from '../components/graph/InvestigationCanvas'
 import InvestigationHeader from '../components/InvestigationHeader'
 import type { WorkspaceView } from '../components/InvestigationHeader'
+import InvestigationGraph from '../components/InvestigationGraph'
 import ResultsList from '../components/ResultsList'
 import RelationshipPanel from '../components/RelationshipPanel'
 import IdentityProfilePanel from '../components/IdentityProfilePanel'
@@ -60,7 +60,12 @@ function stageActive(
   return investigation.status === stage
 }
 
-export default function Investigation() {
+interface Props {
+  /** Which reading of the investigation this route shows. */
+  view: WorkspaceView
+}
+
+export default function Investigation({ view }: Props) {
   const { id = '' } = useParams()
   const [investigation, setInvestigation] = useState<InvestigationDetail | null>(null)
   const [graph, setGraph] = useState<GraphPayload | null>(null)
@@ -73,10 +78,6 @@ export default function Investigation() {
   const [busy, setBusy] = useState(false)
   const [tab, setTab] = useState<InspectorTab>('profile')
   const [highlight, setHighlight] = useState<PathHighlight | null>(null)
-  // The list answers the first question an analyst asks - "you searched
-  // twenty sources, what came back?" - so it opens first. The graph answers
-  // the second one, and is a click away.
-  const [view, setView] = useState<WorkspaceView>('list')
   // Bumped whenever the graph changes, so the analysis panels refetch rather
   // than showing a profile computed from a stale graph.
   const [revision, setRevision] = useState(0)
@@ -200,7 +201,6 @@ export default function Investigation() {
         onResetLayout={() => setLayoutKey((value) => value + 1)}
         busy={busy}
         view={view}
-        onViewChange={setView}
       />
 
       <div className="flex min-h-0 flex-1">
@@ -269,13 +269,12 @@ export default function Investigation() {
             />
           ) : graph && graph.nodes.length > 0 ? (
             <ReactFlowProvider>
-              <InvestigationCanvas
+              <InvestigationGraph
                 graph={graph}
                 filters={filters}
                 selectedNodeId={selectedNodeId}
                 selectedEdgeId={selectedEdgeId}
-                focusEntityId={focusNodeId}
-                onFocusChange={setFocusNodeId}
+                focusNodeId={focusNodeId}
                 layoutKey={layoutKey}
                 highlight={highlight}
                 onSelectNode={selectNode}
@@ -296,12 +295,12 @@ export default function Investigation() {
                   <p className="mt-2 text-[12px] leading-snug text-faint">
                     Try another identifier, or run discovery again.
                   </p>
-                  <button
-                    onClick={() => setView('list')}
-                    className="mt-3 rounded border border-line px-2 py-1 font-mono text-[11px] text-dim hover:border-accent hover:text-accent"
+                  <Link
+                    to={`/investigations/${investigation.id}`}
+                    className="mt-3 inline-block rounded border border-line px-2 py-1 font-mono text-[11px] text-dim hover:border-accent hover:text-accent"
                   >
                     See what each source answered
-                  </button>
+                  </Link>
                 </div>
               </div>
             )
