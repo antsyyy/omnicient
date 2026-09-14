@@ -22,6 +22,7 @@ import type {
   InvestigationGraph,
   Relationship,
   RelationshipDetail,
+  SourceResults,
 } from '../types'
 
 const BASE = import.meta.env.VITE_API_BASE ?? '/api'
@@ -118,6 +119,10 @@ export const api = {
   getAliases: (id: string) => request<AliasList>(`/investigations/${id}/aliases`),
 
   getLeads: (id: string) => request<LeadList>(`/investigations/${id}/leads`),
+
+  /** What each source yielded, including the ones that yielded nothing. */
+  getResults: (id: string) =>
+    request<SourceResults>(`/investigations/${id}/results`),
 
   findPaths: (
     id: string,

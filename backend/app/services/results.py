@@ -215,11 +215,16 @@ class ResultsService:
             platform=platform,
             platform_name=platform_label(platform),
             category=categories.get(platform, "social"),
+            # An entity node exists, so *something* pointed at this account
+            # even though it was not read. That reference is the fallback
+            # story when the source simply had nothing to show; a refusal is
+            # still reported as a refusal, because a referenced account behind
+            # a login wall is a finding an analyst will want to chase.
             outcome=(
                 SourceOutcome.FOUND
                 if entity.resolved
-                else _outcome_for_reason(reason)
-                if reason
+                else SourceOutcome.UNAVAILABLE
+                if reason and reason not in ANSWERED_EMPTY_REASONS
                 else SourceOutcome.REFERENCED_ONLY
             ),
             entity=EntitySummary.model_validate(entity),

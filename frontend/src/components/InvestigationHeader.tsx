@@ -3,11 +3,15 @@ import type { InvestigationDetail } from '../types'
 import { api } from '../api/client'
 import { formatDate } from '../lib/display'
 
+export type WorkspaceView = 'list' | 'graph'
+
 interface Props {
   investigation: InvestigationDetail
   onRecrawl: () => void
   onResetLayout: () => void
   busy: boolean
+  view: WorkspaceView
+  onViewChange: (view: WorkspaceView) => void
 }
 
 const STATUS_STYLE: Record<string, string> = {
@@ -24,6 +28,8 @@ export default function InvestigationHeader({
   onRecrawl,
   onResetLayout,
   busy,
+  view,
+  onViewChange,
 }: Props) {
   const running = ['CREATED', 'CRAWLING', 'ANALYZING'].includes(investigation.status)
 
@@ -56,12 +62,41 @@ export default function InvestigationHeader({
       </div>
 
       <div className="flex shrink-0 items-center gap-2">
-        <button
-          onClick={onResetLayout}
-          className="rounded border border-line px-2 py-1 text-[12px] text-dim hover:border-line-bright hover:text-ink"
-        >
-          Reset layout
-        </button>
+        {/*
+          Two readings of the same investigation. The list answers "what came
+          back from each source", which is the first question; the graph
+          answers "how do these connect", which is the second.
+        */}
+        <div className="flex overflow-hidden rounded border border-line">
+          {(
+            [
+              ['list', 'Results'],
+              ['graph', 'Graph'],
+            ] as const
+          ).map(([id, label]) => (
+            <button
+              key={id}
+              onClick={() => onViewChange(id)}
+              className="px-2 py-1 font-mono text-[11px] tracking-wide"
+              style={{
+                color: view === id ? 'var(--color-void)' : 'var(--color-dim)',
+                background:
+                  view === id ? 'var(--color-accent)' : 'transparent',
+              }}
+            >
+              {label}
+            </button>
+          ))}
+        </div>
+
+        {view === 'graph' && (
+          <button
+            onClick={onResetLayout}
+            className="rounded border border-line px-2 py-1 text-[12px] text-dim hover:border-line-bright hover:text-ink"
+          >
+            Reset layout
+          </button>
+        )}
         <button
           onClick={onRecrawl}
           disabled={busy || running}

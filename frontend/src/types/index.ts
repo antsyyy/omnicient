@@ -526,3 +526,56 @@ export interface LeadList {
   total: number
   by_priority: Record<string, number>
 }
+
+// ---------------------------------------------------------------------------
+// Per-source results
+// ---------------------------------------------------------------------------
+
+/**
+ * What happened when a source was queried.
+ *
+ * The two that matter most are the ones a graph cannot tell apart:
+ * `NOT_FOUND` means the source answered and the handle is not there, while
+ * `UNAVAILABLE` means it never answered at all. Both leave no node behind.
+ */
+export type SourceOutcome =
+  | 'FOUND'
+  | 'NOT_FOUND'
+  | 'UNAVAILABLE'
+  | 'REFERENCED_ONLY'
+  | 'NOT_QUERIED'
+
+export interface SourceResult {
+  platform: string
+  platform_name: string
+  category: string
+  outcome: SourceOutcome
+  outcome_label: string
+
+  entity: EntitySummary | null
+  identifier: string | null
+  display_name: string | null
+  url: string | null
+
+  confidence: ConfidenceLevel | null
+  score: number | null
+  analyst_status: AnalystStatus | null
+  relationship_id: string | null
+  evidence_count: number
+  contradiction_count: number
+
+  reason: string | null
+  detail: string | null
+  /** Whether there is an association here an analyst could rule on. */
+  actionable: boolean
+}
+
+export interface SourceResults {
+  investigation_id: string
+  seed_identifier: string
+  seed_type: string
+  results: SourceResult[]
+  summary: Record<string, number>
+  found: number
+  queried: number
+}

@@ -7,6 +7,8 @@ interface Props {
   graph: InvestigationGraph | null
   filters: FilterState
   onFiltersChange: (next: FilterState) => void
+  /** Filters shape the graph; the results list has its own. */
+  showFilters: boolean
 }
 
 function Stat({ label, value, tone }: { label: string; value: number; tone?: string }) {
@@ -29,6 +31,7 @@ export default function Sidebar({
   graph,
   filters,
   onFiltersChange,
+  showFilters,
 }: Props) {
   const stats = graph?.stats
   const running =
@@ -86,6 +89,7 @@ export default function Sidebar({
         </section>
       )}
 
+      {showFilters && (
       <section className="border-b border-line px-3 py-3">
         <div className="panel-title mb-2">Filters</div>
         <Filters
@@ -98,6 +102,7 @@ export default function Sidebar({
           onChange={onFiltersChange}
         />
       </section>
+      )}
       </div>
 
       <div className="flex min-h-0 flex-1 flex-col border-t border-line">

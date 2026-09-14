@@ -93,6 +93,38 @@ async def test_a_404_reads_as_nothing_found_not_as_unavailable(repo) -> None:
         assert _outcome_for_reason(refusal) is SourceOutcome.UNAVAILABLE
 
 
+async def test_a_referenced_account_keeps_its_reference_when_the_read_fails(
+    repo,
+) -> None:
+    """An entity node means *something* pointed at this account.
+
+    So a failed direct read does not erase it. The source having nothing to
+    show leaves the reference as the story; an outright refusal is still
+    reported as a refusal, because a referenced account behind a login wall is
+    a finding worth chasing.
+    """
+    from app.models.entity import Entity
+    from app.services.results import ResultsService
+
+    def row(reason: str | None):
+        entity = Entity(
+            investigation_id="i",
+            platform="github",
+            name="@ghost",
+            identifier="ghost",
+            resolved=False,
+        )
+        issues = {"github": (reason, "detail")} if reason else {}
+        return ResultsService._row(entity, "github", {}, {}, issues)
+
+    assert row("NOT_FOUND").outcome is SourceOutcome.REFERENCED_ONLY
+    assert row(None).outcome is SourceOutcome.REFERENCED_ONLY
+    assert row("PRIVATE").outcome is SourceOutcome.UNAVAILABLE
+    assert row("BLOCKED").outcome is SourceOutcome.UNAVAILABLE
+    # The wording that explains the gap travels with the row either way.
+    assert row("NOT_FOUND").reason == "NOT_FOUND"
+
+
 async def test_a_source_that_found_nothing_still_appears(repo, investigation) -> None:
     """Silence is a result. A source missing from the list is a source untold."""
     result = results_for(repo, investigation)
