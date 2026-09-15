@@ -171,6 +171,9 @@ export interface EntitySummary {
   name: string
   identifier: string
   url: string | null
+  display_name: string | null
+  /** The profile picture, where the platform published one. */
+  avatar_url: string | null
 }
 
 export interface Evidence {

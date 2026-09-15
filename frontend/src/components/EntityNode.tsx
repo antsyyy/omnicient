@@ -1,6 +1,7 @@
 import { Handle, Position, type NodeProps } from '@xyflow/react'
 import type { GraphNode } from '../types'
 import { CONFIDENCE_COLOR, CONFIDENCE_LABEL } from '../lib/display'
+import Avatar from './Avatar'
 import PlatformLogo from './PlatformLogo'
 
 export interface EntityNodeData extends Record<string, unknown> {
@@ -83,18 +84,35 @@ export default function EntityNode({ data, selected }: NodeProps) {
         )}
       </div>
 
-      <div
-        className="mt-1 truncate font-mono text-[13px] text-ink"
-        title={node.identifier}
-      >
-        {node.label}
-      </div>
-
-      {node.display_name && node.display_name !== node.label && (
-        <div className="truncate text-[11px] text-faint" title={node.display_name}>
-          {node.display_name}
+      {/*
+        The face beside the handle. It is decoration, not evidence: two
+        accounts showing the same picture is something the engine has to
+        observe and score, never something the canvas may imply by putting
+        them side by side.
+      */}
+      <div className="mt-1 flex items-center gap-2">
+        {node.avatar_url && (
+          <Avatar
+            url={node.avatar_url}
+            platform={node.platform}
+            entityType={node.type}
+            size={26}
+          />
+        )}
+        <div className="min-w-0">
+          <div
+            className="truncate font-mono text-[13px] text-ink"
+            title={node.identifier}
+          >
+            {node.label}
+          </div>
+          {node.display_name && node.display_name !== node.label && (
+            <div className="truncate text-[11px] text-faint" title={node.display_name}>
+              {node.display_name}
+            </div>
+          )}
         </div>
-      )}
+      </div>
 
       <div className="mt-1.5 flex items-center justify-between gap-2">
         {node.confidence_level ? (

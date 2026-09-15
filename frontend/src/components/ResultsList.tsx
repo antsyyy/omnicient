@@ -15,6 +15,7 @@
 
 import { useCallback, useEffect, useMemo, useState } from 'react'
 import { api } from '../api/client'
+import Avatar from './Avatar'
 import PlatformLogo from './PlatformLogo'
 import type { SourceOutcome, SourceResult, SourceResults } from '../types'
 import {
@@ -88,16 +89,29 @@ function ResultRow({
           that found nothing should read as muted at a glance, and a wall of
           brand palette would make every source look equally alive.
         */}
-        <PlatformLogo
-          platform={result.platform}
-          entityType={result.entity?.type}
-          size={15}
-          title={result.platform_name}
-          style={{
-            color: OUTCOME_COLOR[result.outcome],
-            opacity: found ? 1 : 0.55,
-          }}
-        />
+        {/*
+          A found account shows its picture where one was published; the rest
+          keep the platform mark, tinted by what the source answered.
+        */}
+        {found && result.entity?.avatar_url ? (
+          <Avatar
+            url={result.entity.avatar_url}
+            platform={result.platform}
+            entityType={result.entity?.type}
+            size={22}
+          />
+        ) : (
+          <PlatformLogo
+            platform={result.platform}
+            entityType={result.entity?.type}
+            size={15}
+            title={result.platform_name}
+            style={{
+              color: OUTCOME_COLOR[result.outcome],
+              opacity: found ? 1 : 0.55,
+            }}
+          />
+        )}
 
         <span
           className={`shrink-0 text-[12px] ${found ? 'text-ink' : 'text-dim'}`}

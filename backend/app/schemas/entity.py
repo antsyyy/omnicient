@@ -80,7 +80,13 @@ class EntityDetail(EntityRead):
 
 
 class EntitySummary(BaseModel):
-    """Compact entity reference embedded in relationship payloads."""
+    """Compact entity reference embedded in relationship payloads.
+
+    Carries the picture and the display name as well as the handle: every
+    list that shows an account wants to show its face, and re-fetching the
+    whole entity for each row of a results list to get one field would be
+    absurd.
+    """
 
     model_config = ConfigDict(from_attributes=True)
 
@@ -90,6 +96,8 @@ class EntitySummary(BaseModel):
     name: str
     identifier: str
     url: str | None = None
+    display_name: str | None = None
+    avatar_url: str | None = None
 
     @computed_field  # type: ignore[prop-decorator]
     @property

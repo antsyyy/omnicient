@@ -4,10 +4,13 @@ import type { EntityDetail, Relationship } from '../types'
 import {
   CONFIDENCE_COLOR,
   DISCOVERY_LABEL,
-  ENTITY_GLYPH,
   formatDate,
   shortUrl,
 } from '../lib/display'
+import { platformOf } from '../lib/platforms'
+import Avatar from './Avatar'
+import ObservedDetail from './ObservedDetail'
+import PlatformLogo from './PlatformLogo'
 
 interface Props {
   entityId: string
@@ -65,12 +68,25 @@ export default function EntityPanel({
   return (
     <div className="flex h-full flex-col">
       <header className="flex items-start justify-between gap-2 border-b border-line px-4 py-3">
-        <div className="min-w-0">
-          <div className="panel-title">
-            Entity · {ENTITY_GLYPH[entity.type]} {entity.type}
+        <div className="flex min-w-0 gap-3">
+          <Avatar
+            url={entity.avatar_url}
+            platform={entity.platform}
+            entityType={entity.type}
+            size={44}
+          />
+          <div className="min-w-0">
+            <div className="panel-title">Entity · {entity.type}</div>
+            <div className="mt-0.5 truncate text-[13px] text-dim">
+              {entity.platform_name}
+            </div>
+            <div className="truncate font-mono text-[15px] text-ink">{entity.name}</div>
+            {entity.display_name && entity.display_name !== entity.name && (
+              <div className="truncate text-[12px] text-dim">
+                {entity.display_name}
+              </div>
+            )}
           </div>
-          <div className="mt-1 truncate text-[13px] text-dim">{entity.platform_name}</div>
-          <div className="truncate font-mono text-[15px] text-ink">{entity.name}</div>
         </div>
         <button
           onClick={onClose}
@@ -93,7 +109,6 @@ export default function EntityPanel({
           </div>
         )}
 
-        {entity.display_name && <Field label="Display name">{entity.display_name}</Field>}
         {entity.bio && <Field label="Bio">{entity.bio}</Field>}
         {entity.location && <Field label="Location">{entity.location}</Field>}
         {entity.email && <Field label="Public email">{entity.email}</Field>}
@@ -113,20 +128,34 @@ export default function EntityPanel({
         )}
 
         {entity.external_links.length > 0 && (
-          <Field label="External links">
-            <ul className="space-y-0.5">
-              {entity.external_links.map((link) => (
-                <li key={link}>
-                  <a
-                    href={link}
-                    target="_blank"
-                    rel="noreferrer noopener"
-                    className="font-mono text-accent hover:underline"
-                  >
-                    {shortUrl(link, 46)}
-                  </a>
-                </li>
-              ))}
+          <Field label={`Published links · ${entity.external_links.length}`}>
+            {/*
+              A link-in-bio page is mostly this list, so it is worth reading
+              at a glance: each row is marked with the platform it points at,
+              which is the same thing the crawler followed it as.
+            */}
+            <ul className="space-y-1">
+              {entity.external_links.map((link) => {
+                const target = platformOf(link)
+                return (
+                  <li key={link} className="flex items-center gap-1.5">
+                    <PlatformLogo
+                      platform={target ?? 'website'}
+                      size={12}
+                      className="shrink-0 text-faint"
+                    />
+                    <a
+                      href={link}
+                      target="_blank"
+                      rel="noreferrer noopener"
+                      className="min-w-0 truncate font-mono text-accent hover:underline"
+                      title={link}
+                    >
+                      {shortUrl(link, 42)}
+                    </a>
+                  </li>
+                )
+              })}
             </ul>
           </Field>
         )}
@@ -146,6 +175,8 @@ export default function EntityPanel({
         {entity.snapshots.length > 1 && (
           <Field label="Observations">{entity.snapshots.length} snapshots recorded</Field>
         )}
+
+        <ObservedDetail metadata={entity.metadata} />
 
         <section className="border-t border-line pt-3">
           <div className="panel-title mb-1">Relationships · {relationships.length}</div>
