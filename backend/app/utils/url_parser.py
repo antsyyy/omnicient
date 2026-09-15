@@ -38,14 +38,32 @@ PROFILE_PATH_PREFIXES: dict[str, tuple[str, ...]] = {
     "crates": ("users",),
     "codewars": ("users",),
     "devto": (),
+    "chess": ("member",),
+    "lobsters": ("u",),
 }
 
 #: Platforms whose profile URLs *always* carry the prefix above.  Without this,
 #: ``bsky.app/starter-pack/xyz`` reads as the account ``starter-pack`` and
 #: ``news.ycombinator.com/item?id=1`` reads as the account ``item``.
 PROFILE_PATH_REQUIRED: frozenset[str] = frozenset(
-    {"bluesky", "hackernews", "steam", "scratch", "lastfm", "dockerhub", "crates"}
+    {
+        "bluesky",
+        "hackernews",
+        "steam",
+        "scratch",
+        "lastfm",
+        "dockerhub",
+        "crates",
+        "chess",
+        "lobsters",
+    }
 )
+
+#: Hosts that only ever address a piece of content, never an account.
+#: ``youtu.be/ZEcV55ftyR0`` is a video; read as a profile it invents a YouTube
+#: account named after the video id, which is how a link-in-bio page full of
+#: songs became a page full of people.
+CONTENT_ONLY_HOSTS: frozenset[str] = frozenset({"youtu.be", "redd.it", "fb.me"})
 
 #: Platforms that name the account in a query parameter rather than the path,
 #: e.g. ``news.ycombinator.com/user?id=alice``.
@@ -185,6 +203,9 @@ def parse_profile_url(url: str | None) -> tuple[str, str] | None:
         return None
 
     parsed = urlparse(url if "://" in url else f"https://{url}")
+    host = (parsed.netloc or "").lower().removeprefix("www.")
+    if host in CONTENT_ONLY_HOSTS:
+        return None
     segments = [segment for segment in parsed.path.split("/") if segment.strip()]
     if not segments:
         return None

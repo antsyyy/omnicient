@@ -46,6 +46,17 @@ PLATFORM_HOSTS: dict[str, tuple[str, ...]] = {
     "scratch": ("scratch.mit.edu",),
     "duolingo": ("duolingo.com",),
     "medium": ("medium.com",),
+    # Link-in-bio pages: a whole page of somebody's other accounts.
+    "linktree": ("linktr.ee", "linktree.com"),
+    "solo": ("solo.to",),
+    "biolink": ("bio.link",),
+    "gravatar": ("gravatar.com", "en.gravatar.com"),
+    "chess": ("chess.com",),
+    "lobsters": ("lobste.rs",),
+    # No adapter reads these - they wall off anonymous access - but a link to
+    # one is still a lead worth putting on the board as an unread reference.
+    "twitch": ("twitch.tv", "m.twitch.tv"),
+    "tiktok": ("tiktok.com",),
 }
 
 # Alternative spellings analysts (and profile pages) actually use.
@@ -108,6 +119,14 @@ PLATFORM_LABELS: dict[str, str] = {
     "scratch": "Scratch",
     "duolingo": "Duolingo",
     "medium": "Medium",
+    "linktree": "Linktree",
+    "solo": "solo.to",
+    "biolink": "bio.link",
+    "gravatar": "Gravatar",
+    "chess": "Chess.com",
+    "lobsters": "Lobsters",
+    "twitch": "Twitch",
+    "tiktok": "TikTok",
     "username": "Username",
     "organization": "Organization",
     "website": "Website",

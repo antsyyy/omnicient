@@ -22,6 +22,7 @@ from .base import (
     ObservedProfile,
     SourceCategory,
     enrich_profile,
+    visible_text,
 )
 
 
@@ -275,5 +276,66 @@ class LaunchpadAdapter(JsonProfileAdapter):
                 metadata={"date_created": payload["date_created"]}
                 if payload.get("date_created")
                 else {},
+            )
+        )
+
+
+class LobstersAdapter(JsonProfileAdapter):
+    """Lobsters, via the public per-user JSON document.
+
+    Worth reading for one field in particular: the site asks members to
+    record their GitHub and Twitter handles, and publishes them. That is a
+    self-declared cross-platform link rather than an inference from a
+    matching handle.
+    """
+
+    platform = "lobsters"
+    name = "Lobsters"
+    category = SourceCategory.DEV
+    api_template = "https://lobste.rs/u/{identifier}.json"
+    url_template = "https://lobste.rs/u/{identifier}"
+
+    #: Fields naming an account elsewhere, and how to build its URL.
+    LINKED_ACCOUNTS = (
+        ("github_username", "https://github.com/{}"),
+        ("twitter_username", "https://twitter.com/{}"),
+    )
+
+    def parse_json(
+        self, identifier: str, payload: Any, url: str
+    ) -> ObservedProfile | None:
+        if not isinstance(payload, dict) or not payload.get("username"):
+            return None
+        handle = str(payload["username"])
+
+        links: list[str] = []
+        for field, template in self.LINKED_ACCOUNTS:
+            value = payload.get(field)
+            if isinstance(value, str) and value.strip():
+                links.append(template.format(value.strip()))
+
+        avatar = payload.get("avatar_url")
+        if isinstance(avatar, str) and avatar.startswith("/"):
+            # Published relative to the site root; stored absolute so it can
+            # still be fetched from anywhere else.
+            avatar = f"https://lobste.rs{avatar}"
+
+        return enrich_profile(
+            ObservedProfile(
+                platform=self.platform,
+                identifier=handle,
+                name=f"@{handle}",
+                url=url,
+                # Published as HTML. Stored as the text a person wrote, so
+                # the bio comparison is not matching markup tags.
+                bio=visible_text(payload.get("about") or "") or None,
+                avatar_url=avatar or None,
+                external_links=links,
+                source=self.platform,
+                metadata={
+                    key: payload[key]
+                    for key in ("karma", "created_at", "is_moderator")
+                    if payload.get(key) is not None
+                },
             )
         )

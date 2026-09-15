@@ -11,6 +11,7 @@ from __future__ import annotations
 
 from ..config import Settings, get_settings
 from ..utils.logging import get_logger
+from .aggregators import BioLinkAdapter, LinktreeAdapter, SoloToAdapter
 from .base import (
     FailureReason,
     JsonProfileAdapter,
@@ -30,12 +31,14 @@ from .dev import (
     HackerNewsAdapter,
     HuggingFaceAdapter,
     LaunchpadAdapter,
+    LobstersAdapter,
     StackOverflowAdapter,
 )
 from .devto import DevToAdapter
 from .facebook import FacebookAdapter
-from .gaming import SteamAdapter
+from .gaming import ChessComAdapter, SteamAdapter
 from .github import GitHubAdapter
+from .gravatar import GravatarAdapter
 from .instagram import InstagramAdapter
 from .keybase import KeybaseAdapter
 from .learning import CodewarsAdapter, DuolingoAdapter, ScratchAdapter
@@ -54,7 +57,14 @@ ADAPTER_CLASSES: tuple[type[SourceAdapter], ...] = (
     # Sources whose robots.txt permits anonymous lookups, so they work live.
     # Identity and general web.
     KeybaseAdapter,
+    GravatarAdapter,
     WebsiteAdapter,
+    # Link-in-bio pages. The single most productive source an identity
+    # investigation has: a page whose whole purpose is to list its owner's
+    # accounts, published by them.
+    LinktreeAdapter,
+    SoloToAdapter,
+    BioLinkAdapter,
     # Developer platforms.
     GitHubAdapter,
     DevToAdapter,
@@ -64,6 +74,7 @@ ADAPTER_CLASSES: tuple[type[SourceAdapter], ...] = (
     CratesIoAdapter,
     DockerHubAdapter,
     LaunchpadAdapter,
+    LobstersAdapter,
     # Social.
     MastodonAdapter,
     BlueskyAdapter,
@@ -71,6 +82,7 @@ ADAPTER_CLASSES: tuple[type[SourceAdapter], ...] = (
     MediumAdapter,
     # Gaming.
     SteamAdapter,
+    ChessComAdapter,
     # Music.
     SoundCloudAdapter,
     LastFmAdapter,
