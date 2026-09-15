@@ -154,3 +154,86 @@ async def test_analyst_decision_is_preserved_across_recrawl(repo, investigation)
     assert refreshed.analyst_status == "CONFIRMED"
     assert refreshed.analyst_note == "Checked the evidence."
     assert refreshed.reviewed_at is not None
+
+
+# ---------------------------------------------------------------------------
+# Layout
+# ---------------------------------------------------------------------------
+
+
+async def test_the_seed_sits_at_the_centre(repo) -> None:
+    """An investigation radiates from the thing it started with."""
+    from app.schemas.investigation import InvestigationCreate
+    from app.services.graph import GraphService
+    from app.services.investigation import InvestigationService
+
+    service = InvestigationService(repo)
+    created = service.create(
+        InvestigationCreate(identifier="alice_98", platform="instagram", demo=True)
+    )
+    await service.run(created)
+
+    graph = GraphService(repo).build(created)
+    seed = next(node for node in graph.nodes if node.is_seed)
+
+    assert (seed.position.x, seed.position.y) == (0.0, 0.0)
+
+
+async def test_nodes_ring_the_seed_rather_than_forming_a_strip(repo) -> None:
+    """The old layered layout put a whole depth in one very wide row.
+
+    A bare handle asks two dozen sources about itself, so that row ran
+    thousands of pixels wide and the analyst had to pan from one end to the
+    other to read a single level.
+    """
+    from app.schemas.investigation import InvestigationCreate
+    from app.services.graph import GraphService
+    from app.services.investigation import InvestigationService
+
+    service = InvestigationService(repo)
+    created = service.create(
+        InvestigationCreate(identifier="alice_98", platform="instagram", demo=True)
+    )
+    await service.run(created)
+
+    graph = GraphService(repo).build(created)
+    xs = [node.position.x for node in graph.nodes]
+    ys = [node.position.y for node in graph.nodes]
+    width = max(xs) - min(xs)
+    height = max(ys) - min(ys)
+
+    assert height > 0, "a strip has no height at all"
+    # Roughly square rather than a ribbon.
+    assert 0.4 < width / height < 2.5, f"{width:.0f}x{height:.0f} is not radial"
+
+
+async def test_no_two_nodes_are_drawn_on_top_of_each_other(repo) -> None:
+    import math
+
+    from app.schemas.investigation import InvestigationCreate
+    from app.services.graph import GraphService
+    from app.services.investigation import InvestigationService
+
+    service = InvestigationService(repo)
+    created = service.create(
+        InvestigationCreate(identifier="alice_98", platform="instagram", demo=True)
+    )
+    await service.run(created)
+
+    graph = GraphService(repo).build(created)
+    points = [(node.position.x, node.position.y) for node in graph.nodes]
+    closest = min(
+        math.dist(a, b)
+        for index, a in enumerate(points)
+        for b in points[index + 1 :]
+    )
+    # A node card is about 200px wide.
+    assert closest >= 200, f"two nodes are only {closest:.0f}px apart"
+
+
+def test_an_empty_investigation_lays_out_to_nothing() -> None:
+    import networkx as nx
+
+    from app.services.graph import GraphService
+
+    assert GraphService._layout(nx.Graph(), []) == {}

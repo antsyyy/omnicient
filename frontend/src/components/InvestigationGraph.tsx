@@ -287,9 +287,37 @@ export default function InvestigationGraph({
       const parent = graph.nodes.find((node) => node.id === parentId)
       if (!parent) continue
       const id = `org-cluster:${parentId}`
-      // Sit where the group sits, so opening one does not move the canvas.
-      const x = members.reduce((sum, m) => sum + m.position.x, 0) / members.length
-      const y = members.reduce((sum, m) => sum + m.position.y, 0) / members.length
+      /*
+       * In the arc its members just vacated.
+       *
+       * They sit next to each other on their ring - the layout groups a
+       * branch by angle - so collapsing them leaves a gap exactly the right
+       * size, and the cluster drops into it without colliding with anything
+       * still drawn. Averaging the coordinates instead would have put it at
+       * the ring's centre, which is where the seed is, and offsetting it from
+       * the parent landed it on top of the next ring out.
+       *
+       * The mean direction comes from summing unit vectors rather than
+       * averaging angles, so a group spanning the wrap-around at due west
+       * does not average to due east.
+       */
+      let ux = 0
+      let uy = 0
+      let radius = 0
+      for (const member of members) {
+        const distance =
+          Math.hypot(member.position.x, member.position.y) || 1
+        ux += member.position.x / distance
+        uy += member.position.y / distance
+        radius += distance
+      }
+      radius /= members.length
+      const spread = Math.hypot(ux, uy)
+      // Members ringed evenly all the way round have no mean direction worth
+      // trusting; fall back to just below the profile that listed them.
+      const x = spread > 0.001 ? (ux / spread) * radius : parent.position.x
+      const y =
+        spread > 0.001 ? (uy / spread) * radius : parent.position.y + 260
       nodes.push({
         id,
         type: 'orgCluster',
@@ -496,7 +524,9 @@ export default function InvestigationGraph({
         onSelectEdge(null)
       }}
       fitView
-      fitViewOptions={{ padding: 0.25 }}
+      // Generous padding because the legend, the hint and the minimap all
+      // float over the canvas; a tight fit tucks nodes underneath them.
+      fitViewOptions={{ padding: 0.32 }}
       minZoom={0.15}
       maxZoom={2}
       proOptions={{ hideAttribution: true }}

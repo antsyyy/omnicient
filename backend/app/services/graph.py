@@ -12,6 +12,7 @@ processing library, not a store: the source of truth stays in Neo4j.
 
 from __future__ import annotations
 
+import math
 from datetime import UTC, datetime
 
 import networkx as nx
@@ -34,8 +35,11 @@ from ..utils.normalization import platform_label
 logger = get_logger(__name__)
 
 # Layout spacing in React Flow pixels.
-LAYER_HEIGHT = 220
-NODE_SPACING = 260
+#: Distance between one ring and the next.
+RING_GAP = 320
+#: Minimum gap between neighbours on a ring, so a card cannot overlap the one
+#: beside it. A node is about 200px wide; this leaves a little air.
+MIN_ARC = 250
 
 
 class GraphService:
@@ -135,34 +139,89 @@ class GraphService:
 
     @staticmethod
     def _layout(graph: nx.Graph, entities: list[Entity]) -> dict[str, dict[str, float]]:
-        """Layered layout: the seed on top, each crawl depth on its own row.
+        """Radial layout: the seed at the centre, everything else around it.
 
-        An investigation graph is rooted and shallow, so a depth-layered layout
-        reads far better than a force-directed cloud - the analyst can see at a
-        glance how far from the seed a claim is.
+        An investigation graph is rooted and shallow, which is exactly what a
+        radial tree is for.  Laying each depth out as a row instead put a bare
+        handle's two dozen accounts in a single strip thousands of pixels
+        wide - the analyst had to pan from one end to the other to read one
+        level, and the seed those accounts came from sat off to one side of
+        it rather than at the middle of the thing it started.
+
+        Rings are hop distance from the seed, not crawl depth.  They usually
+        agree, but a bare handle asks every source about itself at depth zero,
+        so depth alone would put the seed shoulder to shoulder with the two
+        dozen accounts it found.  Children are placed near their parent's
+        angle, so a branch stays together and the picture reads outward.
         """
         if not entities:
             return {}
 
-        layers: dict[int, list[str]] = {}
-        for entity in entities:
-            layers.setdefault(entity.depth, []).append(entity.id)
-
-        # NetworkX orders each layer; degree-sorting keeps hubs central.
-        positions: dict[str, dict[str, float]] = {}
-        for depth, node_ids in sorted(layers.items()):
-            ordered = sorted(
-                node_ids,
+        by_id = {entity.id: entity for entity in entities}
+        root = next(
+            (entity.id for entity in entities if entity.is_seed),
+            # No seed recorded: the busiest node is the closest thing to one.
+            max(
+                (entity.id for entity in entities),
                 key=lambda node_id: (
+                    graph.degree(node_id) if graph.has_node(node_id) else 0
+                ),
+            ),
+        )
+
+        # Hop distance from the seed, and the neighbour each node was reached
+        # through - which is what lets a branch be kept together.
+        hops: dict[str, int] = {root: 0}
+        parent: dict[str, str] = {}
+        if graph.has_node(root):
+            for node_id, distance in nx.single_source_shortest_path_length(
+                graph, root
+            ).items():
+                hops[node_id] = distance
+            for node_id, path in nx.single_source_shortest_path(graph, root).items():
+                if len(path) > 1:
+                    parent[node_id] = path[-2]
+
+        # Anything the relationships do not reach still has to be drawn. Its
+        # crawl depth is the honest answer, one ring further out than a node
+        # that is genuinely connected at that depth.
+        for entity in entities:
+            hops.setdefault(entity.id, entity.depth + 1)
+
+        rings: dict[int, list[str]] = {}
+        for node_id, ring in hops.items():
+            if node_id in by_id:
+                rings.setdefault(ring, []).append(node_id)
+
+        positions: dict[str, dict[str, float]] = {root: {"x": 0.0, "y": 0.0}}
+        angles: dict[str, float] = {root: 0.0}
+
+        for ring in sorted(rings):
+            if ring == 0:
+                continue
+            members = rings[ring]
+            # Keep a branch together: sort by where the parent sits, and put
+            # the busiest nodes first so the ring order is stable run to run.
+            members.sort(
+                key=lambda node_id: (
+                    angles.get(parent.get(node_id, root), 0.0),
                     -(graph.degree(node_id) if graph.has_node(node_id) else 0),
                     node_id,
-                ),
+                )
             )
-            width = (len(ordered) - 1) * NODE_SPACING
-            for index, node_id in enumerate(ordered):
+            # Wide enough that neighbours cannot overlap, and no wider: the
+            # ring has to seat every node at MIN_ARC apart around it.
+            radius = max(
+                RING_GAP * ring,
+                len(members) * MIN_ARC / (2 * math.pi),
+            )
+            step = 2 * math.pi / len(members)
+            for index, node_id in enumerate(members):
+                angle = index * step
+                angles[node_id] = angle
                 positions[node_id] = {
-                    "x": round(index * NODE_SPACING - width / 2, 2),
-                    "y": round(depth * LAYER_HEIGHT, 2),
+                    "x": round(radius * math.cos(angle), 2),
+                    "y": round(radius * math.sin(angle), 2),
                 }
         return positions
 
