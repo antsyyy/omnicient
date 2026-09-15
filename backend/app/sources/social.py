@@ -13,7 +13,31 @@ from __future__ import annotations
 
 import re
 
-from .base import OpenGraphProfileAdapter, SourceCategory
+from .base import ObservedProfile, OpenGraphProfileAdapter, SourceCategory, parse_meta
+
+#: What t.me serves for any handle it will not show publicly.
+#:
+#: Telegram answers *every* URL with HTTP 200 and an Open Graph card, so a
+#: handle that does not exist looks exactly like one that does unless this is
+#: checked.  Left unchecked it made every account universal: four mangled
+#: Bluesky handles and a private individual's handle all came back "found",
+#: scored, and went onto the canvas as accounts nobody could open.
+#:
+#: The title is the tell.  A public channel puts its own name there; anything
+#: else - a free username, a private account, an account with no public
+#: preview - gets this placeholder and an empty description.  All of those
+#: mean the same thing to an investigation: nothing was observed.
+CONTACT_PLACEHOLDER_RE = re.compile(r"^\s*Telegram:\s*Contact\s*@", re.IGNORECASE)
+
+#: A syntactically invalid handle redirects to the marketing site, which also
+#: answers 200 with a perfectly good card describing the product.
+#: Matches the product's own names exactly and nothing else - "Telegram News"
+#: is a real channel and has to survive this.
+TELEGRAM_MARKETING_RE = re.compile(
+    r"^\s*Telegram(\s+Messenger|\s*[-–—]\s*a new era of messaging)?\s*$",
+    re.IGNORECASE,
+)
+
 
 # "Read writing from DHH on Medium. Creator of Ruby on Rails, Founder ..."
 MEDIUM_PREAMBLE_RE = re.compile(
@@ -38,6 +62,21 @@ class TelegramAdapter(OpenGraphProfileAdapter):
     category = SourceCategory.SOCIAL
     url_template = "https://t.me/{identifier}"
     generic_titles = frozenset({"telegram", "telegram messenger"})
+
+    def parse_profile(
+        self, identifier: str, html: str, url: str
+    ) -> ObservedProfile | None:
+        """Read the card, unless the card is Telegram's way of saying no.
+
+        Every other adapter here can rely on a 404 to mean "not here".
+        Telegram never sends one, so the page has to be read to find out
+        whether there is an account behind it at all.
+        """
+        meta = parse_meta(html)
+        title = meta.get("og:title") or ""
+        if CONTACT_PLACEHOLDER_RE.match(title) or TELEGRAM_MARKETING_RE.match(title):
+            return None
+        return super().parse_profile(identifier, html, url)
 
     def extract_bio(self, meta: dict[str, str], html: str) -> str | None:
         value = meta.get("og:description") or meta.get("description")

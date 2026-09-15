@@ -327,6 +327,81 @@ def test_telegram_rejects_the_placeholder_for_an_unknown_handle() -> None:
     )
 
 
+# ---------------------------------------------------------------------------
+# Telegram: every URL answers 200, so the page has to say whether it is real
+# ---------------------------------------------------------------------------
+
+
+def telegram_page(title: str, description: str = "") -> str:
+    return (
+        f'<html><head><meta property="og:title" content="{title}">'
+        f'<meta property="og:description" content="{description}">'
+        '<meta property="og:image" content="https://cdn.telegram.org/a.jpg">'
+        "</head></html>"
+    )
+
+
+def test_telegram_reads_a_public_channel() -> None:
+    adapter = TelegramAdapter()
+    profile = adapter.parse_profile(
+        "durov",
+        telegram_page("Pavel Durov", "Founder of Telegram."),
+        "https://t.me/durov",
+    )
+
+    assert profile is not None
+    assert profile.display_name == "Pavel Durov"
+    assert profile.bio == "Founder of Telegram."
+
+
+@pytest.mark.parametrize(
+    "handle",
+    ["nobody_at_all_9182", "prabhatacharya19", "cryptonews"],
+)
+def test_telegram_refuses_the_contact_placeholder(handle: str) -> None:
+    """The bug that made Telegram useless: every handle looked like an account.
+
+    t.me never answers 404. It serves this card for a free username, a private
+    account and an account with no public preview alike - and unchecked, that
+    turned every handle a crawl ever guessed into a scored node on the graph.
+    All three mean the same thing here: nothing was observed.
+    """
+    adapter = TelegramAdapter()
+    page = telegram_page(f"Telegram: Contact @{handle}")
+
+    assert adapter.parse_profile(handle, page, f"https://t.me/{handle}") is None
+
+
+@pytest.mark.parametrize(
+    "title",
+    [
+        "Telegram – a new era of messaging",
+        "Telegram - a new era of messaging",
+        "Telegram",
+        "Telegram Messenger",
+    ],
+)
+def test_telegram_refuses_its_own_marketing_page(title: str) -> None:
+    """A handle Telegram considers invalid redirects to the product site."""
+    adapter = TelegramAdapter()
+    page = telegram_page(title, "Fast. Secure. Powerful.")
+
+    assert adapter.parse_profile("x-y.z", page, "https://t.me/x-y.z") is None
+
+
+def test_a_channel_whose_name_merely_starts_with_telegram_is_kept() -> None:
+    """"Telegram News" is a real channel, not the marketing page."""
+    adapter = TelegramAdapter()
+    profile = adapter.parse_profile(
+        "telegram",
+        telegram_page("Telegram News", "The official Telegram on Telegram."),
+        "https://t.me/telegram",
+    )
+
+    assert profile is not None
+    assert profile.display_name == "Telegram News"
+
+
 @pytest.mark.parametrize(
     "url,platform",
     [
