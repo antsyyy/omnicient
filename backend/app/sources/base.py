@@ -590,7 +590,15 @@ def enrich_profile(profile: ObservedProfile) -> ObservedProfile:
     ]
     profile.websites = extract_websites(profile.bio, links)
     profile.emails = extract_emails(text_sources)
-    profile.organizations = extract_organizations(text_sources)
+    # Merge rather than overwrite. An adapter that read organizations from
+    # structured page data - Facebook's Intro block, a developer profile's
+    # company field - knows more than a guess at capitalised words after
+    # "at", and replacing its findings with that guess threw them away.
+    profile.organizations = list(profile.organizations) + [
+        name
+        for name in extract_organizations(text_sources)
+        if name not in profile.organizations
+    ]
     if profile.emails and not profile.email:
         profile.email = profile.emails[0]
     if profile.organizations and not profile.organization:
@@ -708,6 +716,7 @@ class OpenGraphProfileAdapter(SourceAdapter):
                 avatar_url=avatar,
                 location=self.extract_location(meta, html),
                 organization=self.extract_organization(meta, html),
+                organizations=self.extract_organizations(meta, html),
                 external_links=links,
                 source=self.platform,
                 metadata=metadata,
@@ -750,6 +759,19 @@ class OpenGraphProfileAdapter(SourceAdapter):
     def extract_organization(self, meta: dict[str, str], html: str) -> str | None:
         """The employer or institution the profile names."""
         return None
+
+    def extract_organizations(self, meta: dict[str, str], html: str) -> list[str]:
+        """Every organization the profile names - employers past and present,
+        and schools.
+
+        Separate from :meth:`extract_organization` because they answer
+        different questions. That one is "where do they work", shown to an
+        analyst; this one is "what institutions does this profile mention",
+        which is what the correlation engine matches across platforms. Two
+        profiles naming the same former employer is evidence worth scoring
+        even though neither works there now.
+        """
+        return []
 
     def extract_metadata(self, meta: dict[str, str], html: str) -> dict[str, Any]:
         """Extra observed fields to record, e.g. audience counts.

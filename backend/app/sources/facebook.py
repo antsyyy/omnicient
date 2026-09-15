@@ -69,6 +69,10 @@ class FacebookAdapter(OpenGraphProfileAdapter):
         intro = parse_intro(html)
         return intro.current_organization or next(iter(intro.organizations), None)
 
+    def extract_organizations(self, meta: dict[str, str], html: str) -> list[str]:
+        """Employers and schools from the Intro, current first."""
+        return parse_intro(html).organizations
+
     def extract_links(
         self, meta: dict[str, str], html: str, bio: str | None
     ) -> list[str]:

@@ -441,15 +441,19 @@ class CorrelationEngine:
         shared = sorted(first & second)
         if not shared:
             return None
+        # Quote the name as it was published. The comparison is lowercased,
+        # but an analyst reading "the organization 'cloudfactory'" is reading
+        # this module's working form rather than what either profile said.
+        published = next(
+            (name for name in target.organizations if name.lower() == shared[0]),
+            shared[0],
+        )
         return EvidenceItem(
             type=EvidenceType.SHARED_ORGANIZATION,
-            description=f"Both profiles reference the organization '{shared[0]}'",
+            description=f"Both profiles reference the organization '{published}'",
             weight=self.scoring.shared_organization,
             source_url=target.url,
-            extracted_value=next(
-                (name for name in target.organizations if name.lower() == shared[0]),
-                shared[0],
-            ),
+            extracted_value=published,
             normalized_value=shared[0],
         )
 

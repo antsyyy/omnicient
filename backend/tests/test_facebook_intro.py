@@ -260,3 +260,198 @@ def test_an_intro_free_page_leaves_the_profile_fields_empty() -> None:
     assert adapter.extract_organization({}, html) is None
     assert adapter.extract_location({}, html) is None
     assert "intro" not in adapter.extract_metadata({}, html)
+
+
+# ---------------------------------------------------------------------------
+# What the links are for: pivoting to new investigation points
+# ---------------------------------------------------------------------------
+
+
+def wrapped(url: str) -> str:
+    """A destination as Facebook publishes it, behind the l.php redirector."""
+    from urllib.parse import quote
+
+    return f"https://l.facebook.com/l.php?u={quote(url, safe='')}&h=AUA&s=1"
+
+
+def profile_page(*rows: dict) -> str:
+    return page(*rows).replace(
+        '<meta property="og:title" content="Someone"/>',
+        '<meta property="og:title" content="Prabhat Acharya"/>'
+        '<meta property="og:description" content="Prabhat Acharya. 5 likes."/>',
+    )
+
+
+def test_an_intro_link_becomes_a_new_account_to_investigate() -> None:
+    """The whole point of reading the Intro.
+
+    A profile that lists its own Instagram is publishing a connection itself.
+    That is worth far more than the engine noticing two handles look alike,
+    and it has to arrive as a reference the crawler will go and follow.
+    """
+    html = profile_page(
+        row(
+            "prabhatacharya19",
+            ranges=[
+                entity(
+                    wrapped("https://www.instagram.com/prabhatacharya19/"),
+                    typename="ExternalUrl",
+                )
+            ],
+        ),
+        row(
+            "prabhatach",
+            ranges=[
+                entity(
+                    wrapped("https://www.linkedin.com/in/prabhatach"),
+                    typename="ExternalUrl",
+                )
+            ],
+        ),
+    )
+    profile = FacebookAdapter().parse_profile(
+        "prabhatacharya", html, "https://www.facebook.com/prabhatacharya"
+    )
+
+    assert profile is not None
+    found = {reference.key: reference for reference in profile.references}
+    assert ("instagram", "prabhatacharya19") in found
+    assert ("linkedin", "prabhatach") in found
+    # Explicit: the profile said so, rather than the engine inferring it.
+    assert all(reference.explicit for reference in profile.references)
+
+
+def test_the_employer_page_is_not_mistaken_for_another_account() -> None:
+    """"Works at Deerwalk" links to a Facebook page, not a second identity."""
+    html = profile_page(
+        row("Works at Deerwalk", ranges=[entity("https://www.facebook.com/deerwalk")]),
+        row(
+            "prabhatacharya19",
+            ranges=[
+                entity(
+                    wrapped("https://www.instagram.com/prabhatacharya19/"),
+                    typename="ExternalUrl",
+                )
+            ],
+        ),
+    )
+    profile = FacebookAdapter().parse_profile(
+        "prabhatacharya", html, "https://www.facebook.com/prabhatacharya"
+    )
+
+    platforms = {reference.platform for reference in profile.references}
+    assert "instagram" in platforms
+    assert profile.external_links == ["https://www.instagram.com/prabhatacharya19/"]
+
+
+def test_intro_employers_reach_the_field_correlation_scores_on() -> None:
+    """``organizations`` is what SHARED_ORGANIZATION matches across platforms.
+
+    Reading the Intro was pointless for scoring while the employers sat only
+    in metadata: enrich_profile overwrote the list with a guess at capitalised
+    words after "at", throwing the structured reading away.
+    """
+    html = profile_page(
+        row("Works at CloudFactory"),
+        row("Former Director of Engineering at TAI Inc."),
+        row("Studied M.S. Data Science at University of Greenwich"),
+    )
+    profile = FacebookAdapter().parse_profile(
+        "prabhatacharya", html, "https://www.facebook.com/prabhatacharya"
+    )
+
+    assert profile.organizations == [
+        "CloudFactory",
+        "TAI Inc.",
+        "University of Greenwich",
+    ]
+    # A former employer both profiles name is still worth scoring on.
+    assert "TAI Inc." in profile.organizations
+    assert profile.organization == "CloudFactory", "the current one is shown"
+
+
+async def test_a_crawl_follows_an_intro_link_to_a_new_entity() -> None:
+    """End to end: a link in the Intro becomes a node in the investigation.
+
+    Facebook is served the Intro, Instagram answers for the handle it names,
+    and LinkedIn has no adapter at all. All three have to end up on the board:
+    the two that were read, and the one that could not be, recorded as a
+    candidate rather than dropped because coverage ran out.
+    """
+    import httpx
+
+    from app.config import Settings
+    from app.services.crawler import Crawler
+    from app.sources import SourceRegistry
+    from app.sources.base import SafeFetcher
+    from app.sources.instagram import InstagramAdapter
+
+    facebook_html = profile_page(
+        row("Works at Deerwalk", ranges=[entity("https://www.facebook.com/deerwalk")]),
+        row(
+            "prabhatacharya19",
+            ranges=[
+                entity(
+                    wrapped("https://www.instagram.com/prabhatacharya19/"),
+                    typename="ExternalUrl",
+                )
+            ],
+        ),
+        row(
+            "prabhatach",
+            ranges=[
+                entity(
+                    wrapped("https://www.linkedin.com/in/prabhatach"),
+                    typename="ExternalUrl",
+                )
+            ],
+        ),
+    )
+    instagram_html = (
+        '<html><head>'
+        '<meta property="og:title" content="Prabhat (@prabhatacharya19) '
+        '&bull; Instagram photos and videos">'
+        '<meta property="og:description" content="Prabhat on Instagram">'
+        '<meta property="og:url" content="https://www.instagram.com/prabhatacharya19/">'
+        "</head></html>"
+    )
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        host = request.url.host
+        if "facebook" in host:
+            return httpx.Response(200, text=facebook_html,
+                                  headers={"content-type": "text/html"})
+        if "instagram" in host:
+            return httpx.Response(200, text=instagram_html,
+                                  headers={"content-type": "text/html"})
+        return httpx.Response(404, text="")
+
+    settings = Settings(respect_robots=False, request_delay=0, max_depth=2)
+    client = httpx.AsyncClient(
+        transport=httpx.MockTransport(handler), follow_redirects=False
+    )
+    fetcher = SafeFetcher(settings, client=client)
+    registry = SourceRegistry()
+    registry.register(FacebookAdapter(fetcher))
+    registry.register(InstagramAdapter(fetcher))
+
+    outcome = await Crawler(registry, settings).crawl(
+        "facebook", "prabhatacharya", include_similarity=False
+    )
+    await fetcher.aclose()
+
+    entities = list(outcome.entities.values())
+    discovered = {(e.platform, e.identifier) for e in entities}
+    assert ("facebook", "prabhatacharya") in discovered
+    assert ("instagram", "prabhatacharya19") in discovered, (
+        "the Instagram account named in the Intro must be investigated"
+    )
+    assert ("linkedin", "prabhatach") in discovered, (
+        "no adapter is not a reason to lose the lead"
+    )
+
+    # The one with no adapter is on the board but honestly marked unread.
+    linkedin = next(e for e in entities if e.platform == "linkedin")
+    assert not linkedin.resolved
+    instagram = next(e for e in entities if e.platform == "instagram")
+    assert instagram.resolved, "Instagram answered, so it is a read observation"
