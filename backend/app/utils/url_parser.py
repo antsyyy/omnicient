@@ -52,9 +52,27 @@ PROFILE_PATH_REQUIRED: frozenset[str] = frozenset(
 PROFILE_QUERY_PARAM: dict[str, str] = {"hackernews": "id"}
 
 URL_RE = re.compile(r"https?://[^\s<>\"')\]]+", re.IGNORECASE)
+
+#: Suffixes accepted on a domain written without a scheme.
+#:
+#: Deliberately narrower than :data:`KNOWN_GTLDS`. This pattern runs over free
+#: prose - bios, profile descriptions - where a missing space after a full stop
+#: ("went home.Today was fine") would otherwise manufacture a website. The
+#: generic list is right for deciding whether a string the user typed is a
+#: domain; it is too eager for finding domains inside sentences.
+BARE_TLDS = (
+    "com|net|org|io|dev|me|co|app|xyz|info|blog|page|social|sh|ai|tech|ac"
+)
+
 BARE_DOMAIN_RE = re.compile(
     r"(?<![\w@/.])((?:[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?\.)+"
-    r"(?:com|net|org|io|dev|me|co|app|xyz|info|blog|page|social|sh|ai|tech))"
+    rf"(?:{BARE_TLDS})"
+    # A country code layered on top: co.uk, com.au, ac.uk, com.br. Without
+    # this the match stopped at "co" and "example.co.uk" was reported as
+    # "example.co" - not a harmless truncation, but a different domain that
+    # somebody else owns, which the crawler would then go and fetch.
+    r"(?:\.[a-z]{2}(?![a-z]))?"
+    r")"
     r"(/[^\s<>\"')\]]*)?",
     re.IGNORECASE,
 )
