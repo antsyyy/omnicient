@@ -79,11 +79,12 @@ export default function Investigation({ view }: Props) {
   const [tab, setTab] = useState<InspectorTab>('profile')
   const [highlight, setHighlight] = useState<PathHighlight | null>(null)
   /*
-   * The canvas draws what the analyst stands behind. Candidates the engine
-   * has proposed live in the results list until they are ruled on; this
-   * reveals them on the graph for anyone who wants to work that way.
+   * On by default. The canvas is where an analyst reviews what the crawl
+   * found, and it cannot be that while the engine's proposals are hidden -
+   * a fresh investigation drew one edge out of sixty-one. They are drawn
+   * dashed and faint, which says "proposed" without asserting it.
    */
-  const [showCandidates, setShowCandidates] = useState(false)
+  const [showCandidates, setShowCandidates] = useState(true)
   // A pending link: two entity ids the analyst dragged together.
   const [pendingLink, setPendingLink] = useState<[string, string] | null>(null)
   const [linkError, setLinkError] = useState<string | null>(null)

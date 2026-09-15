@@ -472,18 +472,40 @@ evidence and the analyst workflow work against the true graph.
 
 This is where the product philosophy becomes visual. A confirmed association
 and an unreviewed inference must not look alike, or the graph quietly turns a
-guess into a fact:
+guess into a fact. Two channels carry that, and each carries exactly one thing:
+
+**Colour is the confidence band**, and nothing else — the same scale as
+everywhere else in the interface, with rejected, contradicted and
+analyst-asserted edges taking their own hues.
+
+**Stroke is who stands behind the line:**
 
 | Treatment | Meaning |
 | --- | --- |
-| solid, green | an analyst reviewed the evidence and agreed |
-| dashed | an inference the tool is proposing, not asserting |
-| dotted, red | contradicted, or rejected by an analyst |
+| solid, heavier | an analyst reviewed the evidence and agreed, or drew the link themselves |
+| solid | read off a page — `LINKS_TO`, `REFERENCES` — where no inference is involved |
+| thin, dashed, faint | an inference the tool is proposing, not asserting |
+| dashed, red | contradicted, or rejected by an analyst |
 
-Directly observed links (`LINKS_TO`, `REFERENCES`) are solid because they were
-read off a page — no inference is involved in saying a profile links to a site.
-Labels appear on selection, on hover, and on relationships an analyst should
-not miss; labelling every edge produces a wall of text nobody reads.
+Confirming an association deliberately does **not** turn the edge green.
+`--color-confirmed` and `--color-band-high` are the same value, so a green edge
+would say "an analyst agreed" and "the engine scored this 50–74" in one stroke —
+collapsing the exact distinction this interface exists to preserve. Dashed to
+solid also survives greyscale, a screenshot and a colourblind reader, none of
+which green-on-green does.
+
+Proposals are drawn by default. The canvas is where an analyst reviews what the
+crawl found, and it cannot be that while the engine's output is hidden: the
+earlier confirm-to-connect behaviour drew **one edge out of sixty-one** on a
+real investigation, and put observed links behind the same gate — asking an
+analyst to confirm that a page contains a link the crawler read from it.
+`hide candidates` collapses the view back to what a person stands behind, which
+is the right picture to export or present from.
+
+Edges are routed straight because the layout is radial: entities sit on rings
+around the seed, so a line between two of them is a spoke or a chord and reads
+as one. Labels appear on selection, on hover, and on relationships an analyst
+should not miss; labelling every edge produces a wall of text nobody reads.
 
 ### Staying legible as it grows
 

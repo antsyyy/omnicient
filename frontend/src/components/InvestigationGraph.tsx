@@ -19,6 +19,7 @@ import type {
   FilterState,
   InvestigationGraph as GraphPayload,
   PathHighlight,
+  RelationshipType,
 } from '../types'
 import {
   ASSERTED_COLOR,
@@ -28,14 +29,36 @@ import {
 } from '../lib/display'
 
 /**
- * Whether an edge has been established rather than merely proposed.
+ * Relationships that were read off a page rather than inferred from one.
  *
- * The graph draws connections an analyst stands behind: one they confirmed,
- * or one they drew themselves. Everything else is a candidate the engine has
- * put forward, and lives in the results list until it is ruled on.
+ * "This profile links to that site" is an observation: the anchor tag is
+ * there, and no reasoning stands between the page and the claim. Nothing
+ * about it is waiting on an analyst's judgement, so it is drawn solid and
+ * drawn always - the same treatment a confirmed inference gets, for the same
+ * reason, which is that neither one is a guess.
+ */
+const OBSERVED = new Set<RelationshipType>(['LINKS_TO', 'REFERENCES'])
+
+function isObserved(edge: GraphPayload['edges'][number]): boolean {
+  return OBSERVED.has(edge.relationship_type)
+}
+
+/**
+ * Whether an edge asserts something, as opposed to proposing it.
+ *
+ * Three ways to qualify: an analyst confirmed it, an analyst drew it, or
+ * nobody inferred anything in the first place because it was observed.
+ *
+ * This used to require one of the first two, which meant a crawl's entire
+ * output stayed off the canvas until somebody clicked through a list - on a
+ * typical investigation, one edge drawn out of sixty-one - and it put
+ * observed links behind the same gate, asking an analyst to confirm that a
+ * page contains a link the crawler read from it.
  */
 function isEstablished(edge: GraphPayload['edges'][number]): boolean {
-  return edge.analyst_status === 'CONFIRMED' || edge.origin === 'ANALYST'
+  return (
+    edge.analyst_status === 'CONFIRMED' || edge.origin === 'ANALYST' || isObserved(edge)
+  )
 }
 
 const nodeTypes = { entity: EntityNode }
@@ -84,13 +107,25 @@ function Legend({
           />
           <span className="text-dim">Asserted by you</span>
         </li>
+      </ul>
+
+      {/*
+        The second channel, and the one that carries the claim. Colour above
+        is the band; thickness and dashes here are who stands behind the line.
+      */}
+      <div className="panel-title mb-1.5 mt-2 border-t border-line pt-2">Standing</div>
+      <ul className="space-y-1">
+        <li className="flex items-center gap-1.5 font-mono text-[10px]">
+          <span className="h-[2.5px] w-4 shrink-0 rounded bg-dim" />
+          <span className="text-dim">Confirmed, or read off a page</span>
+        </li>
         {showCandidates && (
           <li className="flex items-center gap-1.5 font-mono text-[10px]">
             <span
-              className="h-0 w-4 shrink-0 border-t border-dotted"
+              className="h-0 w-4 shrink-0 border-t border-dashed"
               style={{ borderColor: 'var(--color-faint)' }}
             />
-            <span className="text-faint">Candidate, not yet ruled on</span>
+            <span className="text-faint">Proposed, not yet ruled on</span>
           </li>
         )}
       </ul>
@@ -109,9 +144,12 @@ interface Props {
   graph: GraphPayload
   filters: FilterState
   /**
-   * Draw the unreviewed candidates too, faintly. Off by default: the point of
-   * this canvas is the picture the analyst has built, not everything the
-   * engine proposed.
+   * Draw the engine's unreviewed proposals too, dashed and faint.
+   *
+   * On by default, because a review surface that hides what there is to
+   * review is not one. Turning it off leaves only what a person stands
+   * behind - confirmed, asserted, or read straight off a page - which is the
+   * right picture to export or present from.
    */
   showCandidates: boolean
   /** Ask to draw a link between two entities. */
@@ -267,9 +305,10 @@ export default function InvestigationGraph({
             edge.relationship_type === 'CONTRADICTORY' || edge.contradiction_count > 0
           const rejected = edge.analyst_status === 'REJECTED'
           const asserted = edge.origin === 'ANALYST'
-          // Proposed by the engine, not yet ruled on: shown only when the
-          // analyst asks to see candidates, and drawn so it cannot be
-          // mistaken for something they have accepted.
+          const confirmed = edge.analyst_status === 'CONFIRMED'
+          // An inference nobody has ruled on yet. Drawn, because hiding the
+          // engine's output makes it unreviewable - but drawn dashed, so it
+          // cannot be mistaken for something a person stands behind.
           const candidate = !isEstablished(edge)
           const onPath = highlight ? highlight.edgeIds.has(edge.id) : false
           const dimmed =
@@ -290,7 +329,16 @@ export default function InvestigationGraph({
             id: edge.id,
             source: edge.source,
             target: edge.target,
-            type: 'smoothstep',
+            /*
+             * Straight, because the layout is radial: entities sit on rings
+             * around the seed, so a line between two of them is a spoke or a
+             * chord and reads as one. Orthogonal routing fought that - with
+             * only confirmed edges drawn it was rarely visible, but once the
+             * engine's proposals are on the canvas the right-angle detours
+             * overlap into large rectangles that look like structure and are
+             * only routing.
+             */
+            type: 'straight',
             selected: edge.id === selectedEdgeId,
             animated: edge.relationship_type === 'POTENTIAL_SAME_IDENTITY',
             /*
@@ -314,6 +362,22 @@ export default function InvestigationGraph({
               stroke: 'var(--color-line)',
             },
             labelStyle: { fill: 'var(--color-dim)', fontSize: 10 },
+            /*
+             * Two channels, one meaning each.
+             *
+             * Colour is the confidence band and nothing else. Stroke is who
+             * stands behind the line: dashed while the engine is merely
+             * proposing it, solid once it was confirmed or observed, heavier
+             * again when a person drew it themselves.
+             *
+             * Confirmation deliberately does *not* recolour the edge green.
+             * --color-confirmed and --color-band-high are the same value, so
+             * a green edge would say "an analyst agreed" and "the engine
+             * scored this 50-74" in one stroke, collapsing the distinction
+             * this whole interface exists to preserve. Dash to solid is also
+             * legible in greyscale, in a screenshot, and to a colourblind
+             * reader, none of which green on green is.
+             */
             style: {
               stroke: onPath ? 'var(--color-accent)' : color,
               strokeWidth: onPath
@@ -323,14 +387,16 @@ export default function InvestigationGraph({
                   : candidate
                     ? 1
                     : asserted
-                      ? 2
-                      : 1.5,
+                      ? 2.5
+                      : confirmed
+                        ? 2.5
+                        : 1.5,
               strokeDasharray: candidate
                 ? '2 5'
                 : rejected || contradictory
                   ? '5 4'
                   : undefined,
-              opacity: dimmed ? 0.12 : candidate ? 0.45 : 1,
+              opacity: dimmed ? 0.12 : candidate ? 0.5 : 1,
             },
           }
         }),
