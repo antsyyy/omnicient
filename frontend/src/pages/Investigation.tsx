@@ -21,14 +21,12 @@ import type {
   PathHighlight,
   RelationshipType,
 } from '../types'
-import { CONFIDENCE_ORDER, ENTITY_TYPES, RELATIONSHIP_TYPES } from '../lib/display'
+import { CONFIDENCE_ORDER, ENTITY_TYPES } from '../lib/display'
 
 const DEFAULT_FILTERS: FilterState = {
   entityTypes: new Set(ENTITY_TYPES),
-  relationshipTypes: new Set(RELATIONSHIP_TYPES),
   confidenceLevels: new Set<ConfidenceLevel>([...CONFIDENCE_ORDER, 'INSUFFICIENT']),
-  hideRejected: false,
-  minScore: 0,
+  showUnassociated: true,
 }
 
 const RUNNING = ['CREATED', 'CRAWLING', 'ANALYZING']

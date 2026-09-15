@@ -205,47 +205,60 @@ export default function InvestigationGraph({
     return hidden
   }, [orgGroups])
 
-  /** Edges that survive the current filter set. */
+  /**
+   * Edges that survive the current filter set.
+   *
+   * Only two questions now: has this been established, and was it rejected.
+   * Which entities are on screen is decided below, and an edge between two
+   * visible entities is always drawn - a line whose endpoints are both
+   * present but which is hidden by a filter of its own is just confusing.
+   */
   const visibleEdges = useMemo(
     () =>
       graph.edges.filter((edge) => {
-        const established = isEstablished(edge)
-        if (!established && !showCandidates) return false
+        if (!isEstablished(edge) && !showCandidates) return false
         // A rejected edge is a decision, not a candidate: never redrawn.
-        if (edge.analyst_status === 'REJECTED') return false
-        if (!filters.relationshipTypes.has(edge.relationship_type)) return false
-        /*
-         * An analyst-drawn link scores nothing, so the confidence filters
-         * would silently erase it. It does not sit on that scale at all -
-         * filtering it by a band it was never given would hide the analyst's
-         * own work from them.
-         */
-        if (established && edge.origin === 'ANALYST') return true
-        if (!filters.confidenceLevels.has(edge.confidence_level)) return false
-        if (edge.confidence_score < filters.minScore) return false
-        return true
+        return edge.analyst_status !== 'REJECTED'
       }),
-    [graph.edges, filters, showCandidates],
+    [graph.edges, showCandidates],
   )
 
   /**
    * Nodes that survive the filters.
    *
-   * Every discovered entity stays on the canvas whether or not anything
-   * connects it yet. The entity was observed - that is a fact, and it is also
-   * what the analyst needs in front of them in order to draw a link to it.
-   * The connections are what have to be earned, not the nodes.
+   * Confidence is applied here rather than to the edges, and that is the
+   * whole of the fix. Every entity found stays on the canvas whether or not
+   * anything connects it yet - but which entities those are is exactly what
+   * an analyst wants to narrow, and a band applied to edges narrowed nothing
+   * they could see: the canvas only draws associations somebody has
+   * confirmed, so the filter was being applied to lines that were already
+   * hidden. Unchecking "Low · 127" changed nothing at all.
+   *
+   * A node's band is the strongest association touching it. An entity
+   * nothing has associated yet has no band, and is kept or hidden by its own
+   * control rather than vanishing when the first band is unchecked.
    */
   const visibleNodeIds = useMemo(
     () =>
       new Set(
         graph.nodes
           .filter((node) => filters.entityTypes.has(node.type))
+          .filter((node) =>
+            node.confidence_level === null
+              ? filters.showUnassociated
+              : filters.confidenceLevels.has(node.confidence_level),
+          )
           // Members of a collapsed cluster are drawn by the cluster instead.
           .filter((node) => !collapsedOrgIds.has(node.id))
           .map((node) => node.id),
       ),
-    [graph.nodes, filters.entityTypes, collapsedOrgIds],
+    [
+      graph.nodes,
+      filters.entityTypes,
+      filters.confidenceLevels,
+      filters.showUnassociated,
+      collapsedOrgIds,
+    ],
   )
 
   /** In focus mode, everything but the focused node and its neighbours dims. */

@@ -330,10 +330,17 @@ export interface NewInvestigationInput {
 /** Client-side graph filter state. */
 export interface FilterState {
   entityTypes: Set<EntityType>
-  relationshipTypes: Set<RelationshipType>
+  /**
+   * Bands an entity's *strongest* association may fall in.
+   *
+   * Filters entities, not edges. Filtering edges by confidence changed
+   * nothing an analyst could see: the canvas only draws associations that
+   * have been confirmed, so the bands were being applied to lines that were
+   * already hidden.
+   */
   confidenceLevels: Set<ConfidenceLevel>
-  hideRejected: boolean
-  minScore: number
+  /** Keep entities that no association touches yet - the seed, and misses. */
+  showUnassociated: boolean
 }
 
 // ---------------------------------------------------------------------------

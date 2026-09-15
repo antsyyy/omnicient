@@ -1,3 +1,4 @@
+import { useMemo } from 'react'
 import type { FilterState, InvestigationDetail, InvestigationGraph } from '../types'
 import Filters from './Filters'
 
@@ -41,6 +42,27 @@ export default function Sidebar({
 }: Props) {
   const stats = graph?.stats
 
+  /*
+   * Counted from the nodes, not from the backend's relationship tallies.
+   * The filter narrows entities, so the number beside each band has to be
+   * the number of entities it would hide - the edge counts said "Low 127"
+   * next to a control that removed nineteen things from the canvas.
+   */
+  const confidenceCounts = useMemo(() => {
+    const byConfidence: Record<string, number> = {}
+    let unassociated = 0
+    for (const node of graph?.nodes ?? []) {
+      if (node.confidence_level === null) unassociated += 1
+      else byConfidence[node.confidence_level] =
+        (byConfidence[node.confidence_level] ?? 0) + 1
+    }
+    return {
+      byEntityType: stats?.by_entity_type ?? {},
+      byConfidence,
+      unassociated,
+    }
+  }, [graph?.nodes, stats?.by_entity_type])
+
   return (
     <aside className="flex w-[260px] shrink-0 flex-col overflow-y-auto border-r border-line bg-panel">
       <div className="flex flex-col">
@@ -73,11 +95,7 @@ export default function Sidebar({
         <div className="panel-title mb-2">Filters</div>
         <Filters
           filters={filters}
-          counts={{
-            byEntityType: stats?.by_entity_type ?? {},
-            byRelationshipType: stats?.by_relationship_type ?? {},
-            byConfidence: stats?.by_confidence ?? {},
-          }}
+          counts={confidenceCounts}
           onChange={onFiltersChange}
         />
       </section>
