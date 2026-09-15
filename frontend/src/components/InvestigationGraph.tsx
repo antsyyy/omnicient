@@ -528,10 +528,13 @@ export default function InvestigationGraph({
         A graph of unconnected cards is confusing unless it says why. Nothing
         has been ruled on yet, so nothing is drawn - and the two ways forward
         are named rather than left to be discovered.
+
+        Bottom-centre, not top: the legend owns the top-left corner and the
+        canvas controls the top-right, and this notice was landing on both.
       */}
       {derivedEdges.length === 0 && nodes.length > 0 && (
-        <Panel position="top-center">
-          <div className="max-w-[420px] rounded-md border border-line bg-panel/95 px-3 py-2 text-center">
+        <Panel position="bottom-center">
+          <div className="mb-2 max-w-[420px] rounded-md border border-line bg-panel/95 px-3 py-2 text-center">
             <div className="panel-title">No connections drawn yet</div>
             <p className="mt-1 text-[11px] leading-snug text-dim">
               This canvas shows the links you stand behind. Confirm an
@@ -563,8 +566,13 @@ export default function InvestigationGraph({
         zoomable
         maskColor="rgba(7, 10, 15, 0.82)"
         nodeColor={(node) => {
+          // Not every node on this canvas stands for one entity: a cluster
+          // stands for several and carries no confidence of its own. Reading
+          // through to `.node` unconditionally threw here, and a throw inside
+          // the minimap takes the whole page down with it.
+          if (node.type === 'orgCluster') return 'var(--color-line-bright)'
           const data = node.data as EntityNodeData
-          return data.node.confidence_level
+          return data.node?.confidence_level
             ? CONFIDENCE_COLOR[data.node.confidence_level]
             : '#27384a'
         }}
