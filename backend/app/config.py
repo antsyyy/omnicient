@@ -222,6 +222,33 @@ class Settings:
         )
     )
 
+    #: How long a fetched page may be reused before it is asked for again.
+    #:
+    #: Re-running a crawl re-reads the same profiles. Serving those from the
+    #: last response - and revalidating with the ETag the platform gave us
+    #: rather than re-downloading - is the difference between a demo that
+    #: works twice and one that spends its quota on the first run.
+    cache_ttl_seconds: int = field(
+        default_factory=lambda: _env_int("OMNICIENT_CACHE_TTL", 900)
+    )
+    cache_max_entries: int = field(
+        default_factory=lambda: _env_int("OMNICIENT_CACHE_MAX_ENTRIES", 500)
+    )
+
+    def token_for(self, platform: str) -> str:
+        """An API credential the operator supplied for one platform.
+
+        Read from ``OMNICIENT_TOKEN_<PLATFORM>``, e.g.
+        ``OMNICIENT_TOKEN_GITHUB``. These are the operator's own credentials,
+        used the way each platform documents: GitHub raises an authenticated
+        caller from 60 requests an hour to 5,000, which is the supported
+        answer to running out of quota rather than a way around the limit.
+
+        Never logged, never exported, never attached to a host the adapter
+        did not ask for.
+        """
+        return _env_str(f"OMNICIENT_TOKEN_{platform.upper()}", "").strip()
+
     # Live crawling is opt-in: the shipped default is the offline demo dataset.
     demo_mode: bool = field(
         default_factory=lambda: _env_bool("OMNICIENT_DEMO_MODE", True)

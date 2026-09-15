@@ -188,6 +188,54 @@ class FetchResult:
     text: str = ""
     content_type: str = ""
     hops: list[str] = field(default_factory=list)
+    #: True when this body was reused rather than downloaded again. Nothing
+    #: was spent against the platform's limit to produce it.
+    from_cache: bool = False
+
+
+@dataclass
+class CachedResponse:
+    """A body worth reusing, and what the platform gave us to revalidate it."""
+
+    text: str
+    content_type: str
+    #: Validators the platform issued. Sending them back is what turns a
+    #: re-read into a 304, which every documented rate limit treats as free.
+    etag: str | None = None
+    last_modified: str | None = None
+    stored_at: float = 0.0
+
+
+def _is_quota_exhausted(response: httpx.Response) -> bool:
+    """Whether a 403 is really "you are out of quota" in disguise.
+
+    GitHub answers an exhausted limit with 403 and ``X-RateLimit-Remaining:
+    0`` rather than 429. Reported as BLOCKED it reads as "the platform
+    declined", which sends an analyst looking for a permissions problem that
+    does not exist - it is a limit that resets on its own.
+    """
+    if response.status_code != 403:
+        return False
+    remaining = response.headers.get("x-ratelimit-remaining")
+    return remaining is not None and remaining.strip() == "0"
+
+
+def _retry_hint(response: httpx.Response) -> str:
+    """When the platform says it will accept requests again.
+
+    Taken from the response rather than guessed, and only ever reported -
+    waiting it out is the analyst's decision to make.
+    """
+    retry_after = response.headers.get("retry-after")
+    if retry_after and retry_after.strip().isdigit():
+        return f"; retry after {int(retry_after.strip())}s"
+    reset = response.headers.get("x-ratelimit-reset")
+    if reset and reset.strip().isdigit():
+        seconds = int(reset.strip()) - int(time.time())
+        if 0 < seconds <= 86_400:
+            minutes = max(1, round(seconds / 60))
+            return f"; quota resets in about {minutes} min"
+    return ""
 
 
 class SafeFetcher:
@@ -219,6 +267,12 @@ class SafeFetcher:
         self._owns_client = client is None
         self._last_request: dict[str, float] = {}
         self._robots: dict[str, RobotFileParser | None] = {}
+        #: Bodies already fetched this session, keyed by URL. Shared by every
+        #: adapter, because the fetcher is shared.
+        self._cache: dict[str, CachedResponse] = {}
+        #: Per-host quota as the platform last reported it, for the operator
+        #: to see before a crawl rather than discover during one.
+        self.quota: dict[str, dict[str, str]] = {}
         # One lock per host rather than one for the fetcher. A single lock
         # held across the politeness sleep would serialise every request the
         # crawler makes, including to unrelated hosts - which defeats the
@@ -245,6 +299,18 @@ class SafeFetcher:
         one exception type: SSRF rejection, robots restriction, rate limiting,
         oversized bodies, timeouts and network errors.
         """
+        cache_key = self._cache_key(url, headers)
+        fresh = self._cached(cache_key)
+        if fresh is not None:
+            logger.debug("cache_hit url=%s", url)
+            return FetchResult(
+                url=url,
+                status_code=200,
+                text=fresh.text,
+                content_type=fresh.content_type,
+                from_cache=True,
+            )
+
         current = url
         hops: list[str] = []
         seen: set[str] = set()
@@ -259,7 +325,32 @@ class SafeFetcher:
             seen.add(validated.url)
             await self._check_robots(validated.url)
             await self._respect_delay(validated.host)
-            response = await self._request(validated.url, headers)
+            # Offer the validators the platform gave us last time. If nothing
+            # changed it answers 304 with no body, which costs no quota on
+            # every API that documents one.
+            final_key = self._cache_key(validated.url, headers)
+            response = await self._request(
+                validated.url, self._revalidation_headers(final_key, headers)
+            )
+            self._remember_quota(validated.host, response)
+
+            if response.status_code == 304:
+                await response.aclose()
+                stale = self._cache.get(final_key)
+                if stale is not None:
+                    stale.stored_at = time.monotonic()
+                    logger.debug("not_modified url=%s", validated.url)
+                    return FetchResult(
+                        url=validated.url,
+                        status_code=200,
+                        text=stale.text,
+                        content_type=stale.content_type,
+                        hops=hops,
+                        from_cache=True,
+                    )
+                # Revalidated something we no longer hold: ask again plainly.
+                response = await self._request(validated.url, headers)
+                self._remember_quota(validated.host, response)
 
             if response.status_code in (301, 302, 303, 307, 308):
                 location = response.headers.get("location")
@@ -282,17 +373,100 @@ class SafeFetcher:
             finally:
                 await response.aclose()
 
+            content_type = response.headers.get("content-type", "")
+            self._store(
+                {cache_key, final_key}, response, text, content_type
+            )
+
             return FetchResult(
                 url=validated.url,
                 status_code=response.status_code,
                 text=text,
-                content_type=response.headers.get("content-type", ""),
+                content_type=content_type,
                 hops=hops,
             )
 
         raise SourceError(
             FailureReason.NETWORK_ERROR, "too many redirects", url
         )
+
+    # -- reuse ------------------------------------------------------------
+
+    @staticmethod
+    def _cache_key(url: str, headers: dict[str, str] | None) -> str:
+        """What makes two fetches of the same address the same fetch.
+
+        The Accept header is part of it: several of these platforms serve a
+        JSON document and an HTML page from one URL, and handing back the
+        wrong one would be a parse failure at best and another account's data
+        at worst.
+        """
+        accept = (headers or {}).get("Accept", "")
+        return f"{url}\n{accept}"
+
+    def _cached(self, key: str) -> CachedResponse | None:
+        """A stored body still inside its lifetime, if there is one."""
+        ttl = self.settings.cache_ttl_seconds
+        if ttl <= 0:
+            return None
+        entry = self._cache.get(key)
+        if entry is None:
+            return None
+        if time.monotonic() - entry.stored_at > ttl:
+            return None
+        return entry
+
+    def _revalidation_headers(
+        self, key: str, headers: dict[str, str] | None
+    ) -> dict[str, str]:
+        """Add the conditional headers for a body we already hold."""
+        merged = dict(headers or {})
+        entry = self._cache.get(key)
+        if entry is None:
+            return merged
+        if entry.etag:
+            merged.setdefault("If-None-Match", entry.etag)
+        if entry.last_modified:
+            merged.setdefault("If-Modified-Since", entry.last_modified)
+        return merged
+
+    def _store(
+        self,
+        keys: set[str],
+        response: httpx.Response,
+        text: str,
+        content_type: str,
+    ) -> None:
+        """Keep a body for reuse, under the asked-for and final addresses."""
+        if self.settings.cache_ttl_seconds <= 0:
+            return
+        entry = CachedResponse(
+            text=text,
+            content_type=content_type,
+            etag=response.headers.get("etag"),
+            last_modified=response.headers.get("last-modified"),
+            stored_at=time.monotonic(),
+        )
+        for key in keys:
+            self._cache[key] = entry
+        # Oldest out first. A crawl touches a few hundred URLs, so this is a
+        # bound on memory rather than a cache-eviction strategy worth tuning.
+        while len(self._cache) > max(1, self.settings.cache_max_entries):
+            self._cache.pop(next(iter(self._cache)))
+
+    def _remember_quota(self, host: str, response: httpx.Response) -> None:
+        """Record what the platform says is left, for the operator to read."""
+        reported = {
+            name: response.headers[header]
+            for name, header in (
+                ("remaining", "x-ratelimit-remaining"),
+                ("limit", "x-ratelimit-limit"),
+                ("reset", "x-ratelimit-reset"),
+            )
+            if header in response.headers
+        }
+        if reported:
+            self.quota[host] = reported
 
     def _validate(self, url: str):
         try:
@@ -327,8 +501,12 @@ class SafeFetcher:
         status = response.status_code
         if status == 404 or status == 410:
             raise SourceError(FailureReason.NOT_FOUND, f"HTTP {status}", url)
-        if status == 429:
-            raise SourceError(FailureReason.RATE_LIMITED, "HTTP 429", url)
+        if status == 429 or _is_quota_exhausted(response):
+            raise SourceError(
+                FailureReason.RATE_LIMITED,
+                f"HTTP {status}{_retry_hint(response)}",
+                url,
+            )
         if status in (401, 403):
             raise SourceError(FailureReason.BLOCKED, f"HTTP {status}", url)
         if status >= 400:
@@ -435,6 +613,10 @@ class SourceAdapter(ABC):
     name: str = ""
     #: Which kind of site this is, for grouping in the UI and the profile.
     category: SourceCategory = SourceCategory.SOCIAL
+    #: How this platform expects a credential to be presented.
+    auth_scheme: str = "Bearer"
+    #: Set by the concrete adapters, which all take a shared fetcher.
+    fetcher: SafeFetcher
 
     @abstractmethod
     async def lookup(self, identifier: str) -> LookupResult:
@@ -443,6 +625,18 @@ class SourceAdapter(ABC):
     def profile_url(self, identifier: str) -> str | None:
         """Canonical public URL for an identifier on this platform."""
         return None
+
+    def credentials(self) -> dict[str, str]:
+        """Authorization header for this platform, if the operator set one.
+
+        Sent only to this adapter's own endpoint. The value is never logged
+        and never leaves the request.
+        """
+        settings = getattr(self, "fetcher", None)
+        token = settings.settings.token_for(self.platform) if settings else ""
+        if not token:
+            return {}
+        return {"Authorization": f"{self.auth_scheme} {token}"}
 
 
 # ---------------------------------------------------------------------------
@@ -789,9 +983,16 @@ class JsonProfileAdapter(SourceAdapter):
     GitHub and Reddit both serve a documented, unauthenticated endpoint
     describing a public account.  Using it is the *polite* option: it is the
     interface those platforms publish for this purpose, it returns far less
-    data than scraping the HTML page, and it is stable.  No token, cookie or
-    private endpoint is involved - an anonymous request is rate limited, and a
-    rate limit is reported (``RATE_LIMITED``) rather than worked around.
+    data than scraping the HTML page, and it is stable.
+
+    An anonymous request is rate limited, and hitting that limit is reported
+    (``RATE_LIMITED``) rather than worked around.  The operator may supply
+    their own API credential for a platform, which every one of these
+    documents as the way to be granted a larger allowance - GitHub raises an
+    authenticated caller from 60 requests an hour to 5,000.  That is the
+    published route to more quota, not a way around the limit: the requests
+    are still counted, still refused when the larger allowance runs out, and
+    still only ever ask for public data.
     """
 
     #: Public JSON endpoint, formatted with ``identifier``.
@@ -833,7 +1034,10 @@ class JsonProfileAdapter(SourceAdapter):
 
         api_url = self.api_url(identifier)
         try:
-            fetched = await self.fetcher.get(api_url, headers={"Accept": self.accept})
+            fetched = await self.fetcher.get(
+                api_url,
+                headers={"Accept": self.accept, **self.credentials()},
+            )
         except SourceError as exc:
             logger.info(
                 "source_unavailable platform=%s identifier=%s reason=%s",
@@ -916,7 +1120,10 @@ class XmlProfileAdapter(SourceAdapter):
 
         api_url = self.api_url(identifier)
         try:
-            fetched = await self.fetcher.get(api_url, headers={"Accept": self.accept})
+            fetched = await self.fetcher.get(
+                api_url,
+                headers={"Accept": self.accept, **self.credentials()},
+            )
         except SourceError as exc:
             logger.info(
                 "source_unavailable platform=%s identifier=%s reason=%s",
