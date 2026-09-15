@@ -201,6 +201,16 @@ class Settings:
     request_delay: float = field(
         default_factory=lambda: _env_float("OMNICIENT_REQUEST_DELAY", 1.0)
     )
+    #: Ceiling on a fetched avatar. A profile picture larger than this is
+    #: not a profile picture, and the hash only needs a thumbnail anyway.
+    max_image_bytes: int = field(
+        default_factory=lambda: _env_int("OMNICIENT_MAX_IMAGE_BYTES", 1_500_000)
+    )
+    #: How many avatars one crawl may fetch. Each is an extra request, so the
+    #: budget is separate from the page budget and deliberately modest.
+    max_avatar_fetches: int = field(
+        default_factory=lambda: _env_int("OMNICIENT_MAX_AVATAR_FETCHES", 40)
+    )
     max_response_bytes: int = field(
         default_factory=lambda: _env_int("OMNICIENT_MAX_RESPONSE_BYTES", 2_000_000)
     )

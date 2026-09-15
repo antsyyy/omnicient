@@ -38,10 +38,12 @@ from ..schemas.investigation import (
     SourceIssue,
 )
 from ..sources import SourceRegistry, build_registry
+from ..sources.base import SafeFetcher
 from ..utils.identifier import detect_identifier
 from ..utils.logging import get_logger
 from ..utils.normalization import platform_label
 from .alias_detection import AliasCandidate, AliasDetector, normalize_alias_candidate
+from .avatars import AvatarHasher
 from .correlation import CorrelationEngine, CorrelationResult
 from .crawler import Crawler, CrawlOutcome, ObservedEntity
 
@@ -215,6 +217,10 @@ class InvestigationService:
         # Whatever the last level did not already flush.
         self._record_events(investigation, outcome, offset=written_events)
 
+        # Between the crawl and the engine: the avatar comparison needs a
+        # perceptual hash on each profile, and the engine reads profiles.
+        await self._hash_avatars(investigation, outcome)
+
         entity_map = self._persist_entities(investigation, outcome)
         evidence_count = self._persist_links(investigation, outcome, entity_map)
         self._warn_if_seed_unresolved(investigation, outcome, entity_map)
@@ -358,6 +364,37 @@ class InvestigationService:
 
             return build_demo_registry()
         return build_registry(self.settings)
+
+    async def _hash_avatars(
+        self, investigation: Investigation, outcome: CrawlOutcome
+    ) -> None:
+        """Reduce every avatar found to a hash the engine can compare.
+
+        Best effort throughout. An avatar that will not download or will not
+        decode costs one observation; it must never cost the investigation,
+        so nothing here is allowed to raise.
+        """
+        if investigation.demo:
+            # The demo dataset has no real images behind its avatar URLs.
+            return
+        fetcher = SafeFetcher(self.settings)
+        try:
+            hashed = await AvatarHasher(fetcher, self.settings).apply(
+                outcome.profiles
+            )
+        except Exception:  # noqa: BLE001 - a failed hash is not a failed crawl
+            logger.warning("avatar_hashing_failed", exc_info=True)
+            return
+        finally:
+            await fetcher.aclose()
+
+        if hashed:
+            self._event(
+                investigation,
+                "avatars_hashed",
+                f"{hashed} avatars fingerprinted for cross-platform comparison",
+                data={"avatars": hashed},
+            )
 
     # -- persistence -------------------------------------------------------
 

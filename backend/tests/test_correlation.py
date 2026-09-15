@@ -243,3 +243,94 @@ def test_a_shared_personal_domain_is_still_strong_evidence() -> None:
     assert result is not None
     types = {item.type for item in result.evidence}
     assert EvidenceType.SAME_WEBSITE in types
+
+
+# ---------------------------------------------------------------------------
+# The avatar rule, which until now could not fire across platforms
+# ---------------------------------------------------------------------------
+
+
+def _profile(platform: str, identifier: str, **fields):
+    from app.sources.base import ObservedProfile
+
+    return ObservedProfile(
+        platform=platform,
+        identifier=identifier,
+        name=f"@{identifier}",
+        url=f"https://{platform}.com/{identifier}",
+        **fields,
+    )
+
+
+def _avatar_evidence(source, target):
+    from app.config import ScoringConfig
+    from app.services.correlation import CorrelationEngine
+
+    return [
+        item
+        for item in CorrelationEngine(ScoringConfig()).compare(source, target).evidence
+        if item.type == "SAME_AVATAR"
+    ]
+
+
+def test_the_same_photograph_matches_across_two_platforms() -> None:
+    """The case the rule exists for, and the one it could never reach.
+
+    Two sites serve the same picture from completely different addresses, so
+    comparing URLs found nothing. The hashes differ by two bits because each
+    platform re-encoded it.
+    """
+    source = _profile(
+        "instagram",
+        "beaulebens",
+        avatar_url="https://scontent.cdninstagram.com/v/t51.signed",
+        avatar_hash="d3633918984c67a6",
+    )
+    target = _profile(
+        "facebook",
+        "beaulebens",
+        avatar_url="https://scontent.xx.fbcdn.net/v/t1.other",
+        avatar_hash="d3633918984c67a4",
+    )
+
+    found = _avatar_evidence(source, target)
+    assert found, "different addresses, same picture"
+    assert "bits differ" in found[0].description
+
+
+def test_different_pictures_do_not_match() -> None:
+    source = _profile("instagram", "a", avatar_url="https://a/x", avatar_hash="d3633918984c67a6")
+    target = _profile("facebook", "b", avatar_url="https://b/y", avatar_hash="29313a9b894ca662")
+
+    assert _avatar_evidence(source, target) == []
+
+
+def test_a_shared_placeholder_is_not_evidence() -> None:
+    """Two accounts that both have *no* picture are served the same address.
+
+    A real crawl scored twenty-five points for exactly this, linking two
+    unrelated Duolingo accounts because neither had uploaded a photograph.
+    """
+    url = "https://simg-ssl.duolingo.com/avatar/default_2"
+    source = _profile("duolingo", "one", avatar_url=url, avatar_hash="aaaaaaaaaaaaaaaa")
+    target = _profile("duolingo", "two", avatar_url=url, avatar_hash="aaaaaaaaaaaaaaaa")
+
+    assert _avatar_evidence(source, target) == []
+
+
+def test_the_same_address_still_counts() -> None:
+    """A real picture served from one address to two profiles."""
+    url = "https://cdn.example.com/photos/beau.jpg"
+    source = _profile("devto", "a", avatar_url=url)
+    target = _profile("medium", "b", avatar_url=url)
+
+    found = _avatar_evidence(source, target)
+    assert found
+    assert "same address" in found[0].description
+
+
+def test_a_profile_with_no_hash_and_no_shared_address_is_not_a_match() -> None:
+    source = _profile("instagram", "a", avatar_url="https://a/x")
+    target = _profile("facebook", "b", avatar_url="https://b/y")
+
+    assert _avatar_evidence(source, target) == []

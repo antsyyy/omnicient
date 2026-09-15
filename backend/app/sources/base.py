@@ -120,6 +120,10 @@ class ObservedProfile(BaseModel):
     display_name: str | None = None
     bio: str | None = None
     avatar_url: str | None = None
+    #: Perceptual hash of the avatar, filled in after the crawl. Lets the
+    #: engine recognise one photograph across platforms that each serve it
+    #: from a different address.
+    avatar_hash: str | None = None
     location: str | None = None
     email: str | None = None
     organization: str | None = None
@@ -513,6 +517,50 @@ class SafeFetcher:
             raise SourceError(
                 FailureReason.NETWORK_ERROR, f"HTTP {status}", url
             )
+
+    async def get_bytes(self, url: str, *, limit: int | None = None) -> bytes:
+        """Fetch a binary resource - an avatar - under the same guards.
+
+        Everything a page fetch gets: the SSRF check on the address and on
+        every redirect hop, the per-host politeness delay, the robots
+        decision, and a size ceiling. The ceiling is lower by default because
+        a profile picture that is larger than a megabyte is not a profile
+        picture.
+
+        Deliberately not routed through the response cache: the cache holds
+        decoded text, and an image is not text.
+        """
+        validated = self._validate(url)
+        await self._check_robots(validated.url)
+        await self._respect_delay(validated.host)
+        response = await self._request(validated.url, {"Accept": "image/*"})
+        try:
+            self._raise_for_status(response, validated.url)
+            return await self._read_bytes(response, limit or self.settings.max_image_bytes)
+        finally:
+            await response.aclose()
+
+    async def _read_bytes(self, response: httpx.Response, limit: int) -> bytes:
+        """Read at most ``limit`` bytes, abandoning anything larger."""
+        declared = response.headers.get("content-length")
+        if declared and declared.isdigit() and int(declared) > limit:
+            raise SourceError(
+                FailureReason.TOO_LARGE,
+                f"content-length {declared} exceeds {limit} bytes",
+                str(response.url),
+            )
+        chunks: list[bytes] = []
+        total = 0
+        async for chunk in response.aiter_bytes():
+            total += len(chunk)
+            if total > limit:
+                raise SourceError(
+                    FailureReason.TOO_LARGE,
+                    f"response exceeded {limit} bytes",
+                    str(response.url),
+                )
+            chunks.append(chunk)
+        return b"".join(chunks)
 
     async def _read_limited(self, response: httpx.Response) -> str:
         """Read at most ``max_response_bytes`` of the body."""

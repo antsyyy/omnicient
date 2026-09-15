@@ -28,6 +28,11 @@ from ..models.enums import (
     RelationshipType,
 )
 from ..sources.base import ObservedProfile
+from ..utils.imagehash import (
+    MATCH_DISTANCE,
+    hamming_distance,
+    looks_like_default_avatar,
+)
 from ..utils.logging import get_logger
 from ..utils.normalization import (
     is_identifying_host,
@@ -312,24 +317,53 @@ class CorrelationEngine:
     def _shared_avatar(
         self, source: ObservedProfile, target: ObservedProfile
     ) -> EvidenceItem | None:
-        """Same avatar image reference.
+        """The same photograph, however each platform serves it.
 
-        The MVP compares normalized image URLs, which catches the common case
-        of one image reused across platforms.  Perceptual hashing (matching
-        re-encoded or resized copies) is a natural later addition and would
-        slot in here without changing the evidence model.
+        This used to compare normalized image URLs, which meant it could
+        essentially never fire: Instagram serves a signed CDN address, GitHub
+        an ``/u/<id>`` path and Gravatar a hash of an email, so two platforms
+        never produce the same string. A rule worth twenty-five points was
+        dead in exactly the case it exists for.
+
+        It now compares perceptual hashes, which survive the re-encoding and
+        rescaling that happens when one picture is uploaded to five sites. The
+        distance is recorded on the evidence: zero is the same file, and a
+        handful of bits is the same image after a platform has processed it.
+        An analyst reading the evidence can see which they are looking at.
         """
-        first = normalize_url(source.avatar_url)
-        second = normalize_url(target.avatar_url)
-        if not first or not second or first != second:
+        # A placeholder is not somebody's face. Two accounts that both never
+        # uploaded a picture are served the same address, and reading that as
+        # evidence links strangers for having nothing in common.
+        if looks_like_default_avatar(source.avatar_url) or looks_like_default_avatar(
+            target.avatar_url
+        ):
             return None
+
+        first_url = normalize_url(source.avatar_url)
+        second_url = normalize_url(target.avatar_url)
+        same_address = bool(first_url and first_url == second_url)
+
+        distance = hamming_distance(source.avatar_hash, target.avatar_hash)
+        same_image = distance is not None and distance <= MATCH_DISTANCE
+        if not same_address and not same_image:
+            return None
+
+        if same_address:
+            detail = f"served from the same address: {first_url}"
+        elif distance == 0:
+            detail = "byte-for-byte the same picture, served from two addresses"
+        else:
+            detail = (
+                f"the same picture re-encoded by each platform "
+                f"({distance} of 64 bits differ)"
+            )
         return EvidenceItem(
             type=EvidenceType.SAME_AVATAR,
-            description=f"Both profiles use the same public avatar image: {first}",
+            description=f"Both profiles publish the same avatar - {detail}",
             weight=self.scoring.shared_avatar,
-            source_url=first,
+            source_url=first_url or source.avatar_url,
             extracted_value=source.avatar_url,
-            normalized_value=first,
+            normalized_value=source.avatar_hash or first_url,
         )
 
     @staticmethod
