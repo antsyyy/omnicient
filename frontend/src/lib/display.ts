@@ -42,6 +42,10 @@ export const ENTITY_TYPES: EntityType[] = [
   'DOMAIN',
   'EMAIL',
   'ORGANIZATION',
+  // A bare handle seeds a USERNAME pivot node. Leaving it out of this list
+  // filtered the seed off its own canvas: an investigation started from a
+  // username drew every account it found and not the handle they came from.
+  'USERNAME',
 ]
 
 export const ENTITY_LABEL: Record<string, string> = {

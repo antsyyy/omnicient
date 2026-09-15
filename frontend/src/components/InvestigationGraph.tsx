@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
+import { useCallback, useEffect, useMemo, useRef } from 'react'
 import {
   Background,
   BackgroundVariant,
@@ -41,9 +41,6 @@ function isEstablished(edge: GraphPayload['edges'][number]): boolean {
 }
 
 const nodeTypes = { entity: EntityNode, orgCluster: OrgClusterNode }
-
-//: Below this, a cluster is more clutter than the nodes it replaces.
-const CLUSTER_FROM = 2
 
 /**
  * What the drawing means.
@@ -106,8 +103,7 @@ function Legend({
       </div>
       {clusters > 0 && (
         <div className="mt-1 font-mono text-[10px] text-faint">
-          Organizations are grouped by the profile that listed them — click to
-          open.
+          Organizations are grouped by the profile that listed them.
         </div>
       )}
       <div className="mt-1 font-mono text-[10px] text-faint">
@@ -165,7 +161,6 @@ export default function InvestigationGraph({
 }: Props) {
   const { fitView } = useReactFlow()
   const dragged = useRef<Record<string, { x: number; y: number }>>({})
-  const [openClusters, setOpenClusters] = useState<Set<string>>(new Set())
 
   /*
    * Organizations, gathered by the profile that listed them.
@@ -186,28 +181,29 @@ export default function InvestigationGraph({
     for (const node of graph.nodes) {
       if (node.type !== 'ORGANIZATION') continue
       const parent = parentOf.get(node.id)
-      // An organization nothing points at has nothing to collapse into.
+      // Nothing points at it, so there is no profile to gather it under. It
+      // keeps its own node rather than vanishing from the canvas.
       if (!parent) continue
       const members = groups.get(parent) ?? []
       members.push(node)
       groups.set(parent, members)
     }
-    // One organization on its own reads better as itself.
-    for (const [parent, members] of [...groups]) {
-      if (members.length < CLUSTER_FROM) groups.delete(parent)
-    }
     return groups
   }, [graph.nodes, graph.edges])
 
-  /** Organization ids currently represented by a collapsed cluster. */
+  /**
+   * Organizations drawn by a cluster rather than as nodes of their own.
+   *
+   * Every one that has a parent: an organization is never a loose node on
+   * this canvas, whatever the size of the group.
+   */
   const collapsedOrgIds = useMemo(() => {
     const hidden = new Set<string>()
-    for (const [parent, members] of orgGroups) {
-      if (openClusters.has(parent)) continue
+    for (const members of orgGroups.values()) {
       for (const member of members) hidden.add(member.id)
     }
     return hidden
-  }, [orgGroups, openClusters])
+  }, [orgGroups])
 
   /** Edges that survive the current filter set. */
   const visibleEdges = useMemo(
@@ -290,7 +286,6 @@ export default function InvestigationGraph({
     for (const [parentId, members] of orgGroups) {
       const parent = graph.nodes.find((node) => node.id === parentId)
       if (!parent) continue
-      const expanded = openClusters.has(parentId)
       const id = `org-cluster:${parentId}`
       // Sit where the group sits, so opening one does not move the canvas.
       const x = members.reduce((sum, m) => sum + m.position.x, 0) / members.length
@@ -302,20 +297,12 @@ export default function InvestigationGraph({
         data: {
           members,
           sourceLabel: parent.label,
-          expanded,
           dimmed: focusNeighbours ? !focusNeighbours.has(parentId) : false,
-          onToggle: () =>
-            setOpenClusters((current) => {
-              const next = new Set(current)
-              if (next.has(parentId)) next.delete(parentId)
-              else next.add(parentId)
-              return next
-            }),
         } satisfies OrgClusterData,
       })
     }
     return nodes
-  }, [orgGroups, openClusters, graph.nodes, filters.entityTypes, focusNeighbours])
+  }, [orgGroups, graph.nodes, filters.entityTypes, focusNeighbours])
 
   /*
    * Edge labels are the first thing to overwhelm this diagram. On a small
@@ -498,7 +485,8 @@ export default function InvestigationGraph({
       onNodesChange={handleNodesChange}
       onConnect={handleConnect}
       onNodeClick={(_, node) => {
-        // The cluster handles its own click: it opens, it is not an entity.
+        // A cluster stands for several entities, so there is no one entity
+        // for the inspector to open.
         if (node.type === 'orgCluster') return
         onSelectNode(node.id)
       }}

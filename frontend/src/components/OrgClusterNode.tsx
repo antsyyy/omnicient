@@ -1,48 +1,41 @@
 /**
  * The organizations one profile listed, as a single node.
  *
- * A Facebook Intro with five jobs and three degrees puts eight organization
- * nodes on the canvas for one account. They are worth keeping — a shared
- * employer is evidence the correlation engine scores on — but they are
- * attributes of a profile, not identities in their own right, and drawn as
- * peers of the accounts they swamp them.
+ * A Facebook Intro with five jobs and three degrees put eight organization
+ * nodes on the canvas for one account — two thirds of the graph, drawn as
+ * peers of the accounts they swamped. They are worth keeping, because a
+ * shared employer is evidence the correlation engine scores on, but they are
+ * attributes of a profile rather than identities in their own right.
  *
- * So they collapse into one node attached to the profile that listed them,
- * and open on click when an analyst actually wants to read them.
+ * So they live here instead: one node per profile, listing all of them, and
+ * no organization is ever drawn loose on the canvas.
  */
 
 import { Handle, Position, type NodeProps } from '@xyflow/react'
 import type { GraphNode } from '../types'
 
 export interface OrgClusterData extends Record<string, unknown> {
-  /** The organizations gathered here. */
+  /** Every organization this profile listed. */
   members: GraphNode[]
   /** The profile that listed them, for the caption. */
   sourceLabel: string
-  expanded: boolean
   dimmed: boolean
-  onToggle: () => void
 }
 
 export default function OrgClusterNode({ data, selected }: NodeProps) {
-  const { members, sourceLabel, expanded, dimmed, onToggle } =
-    data as OrgClusterData
-  const preview = members.slice(0, 3)
-  const rest = members.length - preview.length
+  const { members, sourceLabel, dimmed } = data as OrgClusterData
 
   return (
     <div
-      onClick={onToggle}
-      className="cursor-pointer rounded-md border bg-panel px-3 py-2 shadow-lg transition-opacity"
+      className="rounded-md border bg-panel px-3 py-2 shadow-lg transition-opacity"
       style={{
-        minWidth: 172,
-        maxWidth: 208,
+        minWidth: 188,
+        maxWidth: 232,
         opacity: dimmed ? 0.25 : 1,
         borderColor: selected ? 'var(--color-accent)' : 'var(--color-line-bright)',
         borderStyle: 'dashed',
         borderWidth: selected ? 2 : 1,
       }}
-      title={members.map((member) => member.label).join('\n')}
     >
       <Handle
         type="target"
@@ -60,25 +53,24 @@ export default function OrgClusterNode({ data, selected }: NodeProps) {
         <span>
           {members.length} {members.length === 1 ? 'organization' : 'organizations'}
         </span>
-        <span className="ml-auto font-mono text-[9px]" aria-hidden>
-          {expanded ? '▾' : '▸'}
-        </span>
       </div>
 
-      <div className="mt-1 space-y-0.5">
-        {preview.map((member) => (
-          <div
+      {/*
+        All of them, not a preview. A list long enough to need scrolling is
+        rare, and capping the height keeps one profile's career from setting
+        the height of the whole canvas.
+      */}
+      <ul className="mt-1 max-h-[180px] space-y-0.5 overflow-y-auto">
+        {members.map((member) => (
+          <li
             key={member.id}
-            className="truncate text-[11px] text-dim"
-            title={member.label}
+            className="truncate text-[11px] leading-snug text-dim"
+            title={member.display_name || member.label}
           >
             {member.display_name || member.label}
-          </div>
+          </li>
         ))}
-        {rest > 0 && (
-          <div className="text-[11px] text-faint">and {rest} more</div>
-        )}
-      </div>
+      </ul>
 
       <div className="mt-1.5 truncate border-t border-line pt-1 font-mono text-[9px] text-faint">
         listed on {sourceLabel}
