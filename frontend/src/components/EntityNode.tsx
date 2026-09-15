@@ -45,7 +45,21 @@ export default function EntityNode({ data, selected }: NodeProps) {
             : '0 6px 18px rgba(0, 0, 0, 0.45)',
       }}
     >
-      <Handle type="target" position={Position.Top} />
+      {/*
+        The connection points are how a link gets drawn, so they are visible
+        rather than hidden until hover - an affordance nobody can find is one
+        nobody uses.
+      */}
+      <Handle
+        type="target"
+        position={Position.Top}
+        style={{
+          width: 7,
+          height: 7,
+          background: 'var(--color-panel)',
+          border: '1px solid var(--color-line-bright)',
+        }}
+      />
 
       <div className="flex items-center justify-between gap-2">
         <span className="panel-title flex min-w-0 items-center gap-1.5" title={node.type}>
@@ -107,7 +121,17 @@ export default function EntityNode({ data, selected }: NodeProps) {
         )}
       </div>
 
-      <Handle type="source" position={Position.Bottom} />
+      <Handle
+        type="source"
+        position={Position.Bottom}
+        style={{
+          width: 7,
+          height: 7,
+          background: 'var(--color-panel)',
+          border: '1px solid var(--color-asserted)',
+        }}
+        title="Drag onto another entity to draw a link"
+      />
     </div>
   )
 }

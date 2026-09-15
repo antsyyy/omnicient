@@ -1,7 +1,12 @@
 import { useEffect, useState } from 'react'
 import { api } from '../api/client'
 import type { AnalystStatus, RelationshipDetail } from '../types'
-import { CONFIDENCE_COLOR, CONFIDENCE_LABEL, STATUS_COLOR } from '../lib/display'
+import {
+  ASSERTED_COLOR,
+  CONFIDENCE_COLOR,
+  CONFIDENCE_LABEL,
+  STATUS_COLOR,
+} from '../lib/display'
 import EvidencePanel from './EvidencePanel'
 
 interface Props {
@@ -28,6 +33,21 @@ export default function RelationshipPanel({
   const [error, setError] = useState<string | null>(null)
   const [note, setNote] = useState('')
   const [busy, setBusy] = useState(false)
+  const [removeError, setRemoveError] = useState<string | null>(null)
+
+  async function remove() {
+    setBusy(true)
+    setRemoveError(null)
+    try {
+      await api.deleteLink(relationshipId)
+      onUpdated()
+      onClose()
+    } catch (cause) {
+      setRemoveError((cause as Error).message)
+    } finally {
+      setBusy(false)
+    }
+  }
 
   useEffect(() => {
     let active = true
@@ -113,19 +133,42 @@ export default function RelationshipPanel({
             <div className="panel-title">Type</div>
             <div className="mt-0.5 text-[13px] text-ink">{detail.relationship_label}</div>
           </div>
-          <div>
-            <div className="panel-title">Confidence</div>
-            <div className="mt-0.5 text-[13px] font-semibold" style={{ color }}>
-              {CONFIDENCE_LABEL[detail.confidence_level]}
+          {/*
+            An asserted link has no score and no band. Showing "0 / 100"
+            beside it would read as "the evidence is weak", when the truth is
+            that there is no engine evidence at all - a person vouched for it.
+          */}
+          {detail.analyst_asserted ? (
+            <div className="col-span-2">
+              <div className="panel-title">Origin</div>
+              <div
+                className="mt-0.5 text-[13px] font-semibold"
+                style={{ color: ASSERTED_COLOR }}
+              >
+                Asserted by an analyst
+              </div>
+              <p className="mt-0.5 text-[11px] leading-snug text-faint">
+                Not scored. The engine observed nothing here — this link rests
+                on the reason recorded with it.
+              </p>
             </div>
-          </div>
-          <div>
-            <div className="panel-title">Score</div>
-            <div className="mt-0.5 font-mono text-[13px]" style={{ color }}>
-              {Math.round(detail.confidence_score)}
-              <span className="text-faint"> / 100</span>
-            </div>
-          </div>
+          ) : (
+            <>
+              <div>
+                <div className="panel-title">Confidence</div>
+                <div className="mt-0.5 text-[13px] font-semibold" style={{ color }}>
+                  {CONFIDENCE_LABEL[detail.confidence_level]}
+                </div>
+              </div>
+              <div>
+                <div className="panel-title">Score</div>
+                <div className="mt-0.5 font-mono text-[13px]" style={{ color }}>
+                  {Math.round(detail.confidence_score)}
+                  <span className="text-faint"> / 100</span>
+                </div>
+              </div>
+            </>
+          )}
           <div>
             <div className="panel-title">Analyst status</div>
             <div
@@ -137,12 +180,14 @@ export default function RelationshipPanel({
           </div>
         </section>
 
-        <div className="h-1 w-full overflow-hidden rounded-full bg-line">
-          <div
-            className="h-full rounded-full"
-            style={{ width: `${detail.confidence_score}%`, background: color }}
-          />
-        </div>
+        {!detail.analyst_asserted && (
+          <div className="h-1 w-full overflow-hidden rounded-full bg-line">
+            <div
+              className="h-full rounded-full"
+              style={{ width: `${detail.confidence_score}%`, background: color }}
+            />
+          </div>
+        )}
 
         {detail.summary && (
           <p className="text-[12px] leading-snug text-dim">{detail.summary}</p>
@@ -157,6 +202,27 @@ export default function RelationshipPanel({
           onSelectEntity={onSelectEntity}
         />
 
+        {detail.analyst_asserted ? (
+          <section className="space-y-2 border-t border-line pt-3">
+            <div className="panel-title">Your assertion</div>
+            <p className="text-[11px] leading-snug text-faint">
+              You drew this link. Removing it deletes it and the reason you
+              gave — nothing observed is lost, because nothing was observed.
+            </p>
+            {removeError && (
+              <div className="rounded border border-rejected/50 bg-rejected/10 px-2 py-1.5 text-[11px] leading-snug text-rejected">
+                {removeError}
+              </div>
+            )}
+            <button
+              disabled={busy}
+              onClick={remove}
+              className="w-full rounded border border-rejected/60 bg-rejected/10 px-2 py-1.5 text-[12px] font-medium text-rejected hover:bg-rejected/20 disabled:opacity-50"
+            >
+              {busy ? 'Removing…' : 'Remove this link'}
+            </button>
+          </section>
+        ) : (
         <section className="space-y-2 border-t border-line pt-3">
           <div className="panel-title">Analyst decision</div>
           <p className="text-[11px] leading-snug text-faint">
@@ -197,6 +263,7 @@ export default function RelationshipPanel({
             )}
           </div>
         </section>
+        )}
       </div>
     </div>
   )

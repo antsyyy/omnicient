@@ -6,6 +6,7 @@ import {
   MiniMap,
   Panel,
   ReactFlow,
+  type Connection,
   type Edge,
   type Node,
   type NodeChange,
@@ -19,7 +20,23 @@ import type {
   InvestigationGraph as GraphPayload,
   PathHighlight,
 } from '../types'
-import { CONFIDENCE_COLOR, CONFIDENCE_LABEL, CONFIDENCE_ORDER } from '../lib/display'
+import {
+  ASSERTED_COLOR,
+  CONFIDENCE_COLOR,
+  CONFIDENCE_LABEL,
+  CONFIDENCE_ORDER,
+} from '../lib/display'
+
+/**
+ * Whether an edge has been established rather than merely proposed.
+ *
+ * The graph draws connections an analyst stands behind: one they confirmed,
+ * or one they drew themselves. Everything else is a candidate the engine has
+ * put forward, and lives in the results list until it is ruled on.
+ */
+function isEstablished(edge: GraphPayload['edges'][number]): boolean {
+  return edge.analyst_status === 'CONFIRMED' || edge.origin === 'ANALYST'
+}
 
 const nodeTypes = { entity: EntityNode }
 
@@ -29,7 +46,17 @@ const nodeTypes = { entity: EntityNode }
  * Colour is confidence and nothing else, so it needs saying once, on the
  * canvas, rather than in documentation the analyst will not have open.
  */
-function Legend({ shown, total }: { shown: number; total: number }) {
+function Legend({
+  shown,
+  total,
+  edges,
+  showCandidates,
+}: {
+  shown: number
+  total: number
+  edges: number
+  showCandidates: boolean
+}) {
   return (
     <div className="rounded-md border border-line bg-panel/95 px-2.5 py-2">
       <div className="panel-title mb-1.5">Confidence</div>
@@ -48,14 +75,31 @@ function Legend({ shown, total }: { shown: number; total: number }) {
             className="h-0 w-4 shrink-0 border-t border-dashed"
             style={{ borderColor: 'var(--color-contradiction)' }}
           />
-          <span className="text-dim">Contradicted or rejected</span>
+          <span className="text-dim">Contradicted</span>
         </li>
+        <li className="flex items-center gap-1.5 font-mono text-[10px]">
+          <span
+            className="h-[2px] w-4 shrink-0 rounded"
+            style={{ background: ASSERTED_COLOR }}
+          />
+          <span className="text-dim">Asserted by you</span>
+        </li>
+        {showCandidates && (
+          <li className="flex items-center gap-1.5 font-mono text-[10px]">
+            <span
+              className="h-0 w-4 shrink-0 border-t border-dotted"
+              style={{ borderColor: 'var(--color-faint)' }}
+            />
+            <span className="text-faint">Candidate, not yet ruled on</span>
+          </li>
+        )}
       </ul>
       <div className="mt-1.5 border-t border-line pt-1.5 font-mono text-[10px] text-faint">
         A dashed node was referenced but never read.
       </div>
       <div className="mt-1 font-mono text-[10px] text-faint">
-        {shown} of {total} entities shown
+        {shown} of {total} entities · {edges}{' '}
+        {edges === 1 ? 'connection' : 'connections'}
       </div>
     </div>
   )
@@ -64,6 +108,14 @@ function Legend({ shown, total }: { shown: number; total: number }) {
 interface Props {
   graph: GraphPayload
   filters: FilterState
+  /**
+   * Draw the unreviewed candidates too, faintly. Off by default: the point of
+   * this canvas is the picture the analyst has built, not everything the
+   * engine proposed.
+   */
+  showCandidates: boolean
+  /** Ask to draw a link between two entities. */
+  onConnectRequest: (sourceId: string, targetId: string) => void
   selectedNodeId: string | null
   selectedEdgeId: string | null
   focusNodeId: string | null
@@ -88,6 +140,8 @@ interface Props {
 export default function InvestigationGraph({
   graph,
   filters,
+  showCandidates,
+  onConnectRequest,
   selectedNodeId,
   selectedEdgeId,
   focusNodeId,
@@ -103,31 +157,42 @@ export default function InvestigationGraph({
   const visibleEdges = useMemo(
     () =>
       graph.edges.filter((edge) => {
+        const established = isEstablished(edge)
+        if (!established && !showCandidates) return false
+        // A rejected edge is a decision, not a candidate: never redrawn.
+        if (edge.analyst_status === 'REJECTED') return false
         if (!filters.relationshipTypes.has(edge.relationship_type)) return false
+        /*
+         * An analyst-drawn link scores nothing, so the confidence filters
+         * would silently erase it. It does not sit on that scale at all -
+         * filtering it by a band it was never given would hide the analyst's
+         * own work from them.
+         */
+        if (established && edge.origin === 'ANALYST') return true
         if (!filters.confidenceLevels.has(edge.confidence_level)) return false
         if (edge.confidence_score < filters.minScore) return false
-        if (filters.hideRejected && edge.analyst_status === 'REJECTED') return false
         return true
       }),
-    [graph.edges, filters],
+    [graph.edges, filters, showCandidates],
   )
 
-  /** Nodes that survive the filters, keeping the seed visible at all times. */
-  const visibleNodeIds = useMemo(() => {
-    const connected = new Set<string>()
-    visibleEdges.forEach((edge) => {
-      connected.add(edge.source)
-      connected.add(edge.target)
-    })
-    return new Set(
-      graph.nodes
-        .filter(
-          (node) =>
-            filters.entityTypes.has(node.type) && (node.is_seed || connected.has(node.id)),
-        )
-        .map((node) => node.id),
-    )
-  }, [graph.nodes, visibleEdges, filters.entityTypes])
+  /**
+   * Nodes that survive the filters.
+   *
+   * Every discovered entity stays on the canvas whether or not anything
+   * connects it yet. The entity was observed - that is a fact, and it is also
+   * what the analyst needs in front of them in order to draw a link to it.
+   * The connections are what have to be earned, not the nodes.
+   */
+  const visibleNodeIds = useMemo(
+    () =>
+      new Set(
+        graph.nodes
+          .filter((node) => filters.entityTypes.has(node.type))
+          .map((node) => node.id),
+      ),
+    [graph.nodes, filters.entityTypes],
+  )
 
   /** In focus mode, everything but the focused node and its neighbours dims. */
   const focusNeighbours = useMemo(() => {
@@ -177,6 +242,11 @@ export default function InvestigationGraph({
           const contradictory =
             edge.relationship_type === 'CONTRADICTORY' || edge.contradiction_count > 0
           const rejected = edge.analyst_status === 'REJECTED'
+          const asserted = edge.origin === 'ANALYST'
+          // Proposed by the engine, not yet ruled on: shown only when the
+          // analyst asks to see candidates, and drawn so it cannot be
+          // mistaken for something they have accepted.
+          const candidate = !isEstablished(edge)
           const onPath = highlight ? highlight.edgeIds.has(edge.id) : false
           const dimmed =
             (focusNeighbours
@@ -185,9 +255,11 @@ export default function InvestigationGraph({
             (highlight ? !onPath : false)
           const color = rejected
             ? 'var(--color-rejected)'
-            : contradictory
-              ? 'var(--color-contradiction)'
-              : CONFIDENCE_COLOR[edge.confidence_level]
+            : asserted
+              ? ASSERTED_COLOR
+              : contradictory
+                ? 'var(--color-contradiction)'
+                : CONFIDENCE_COLOR[edge.confidence_level]
           const labelled =
             labelEveryEdge || onPath || edge.id === selectedEdgeId
           return {
@@ -197,10 +269,17 @@ export default function InvestigationGraph({
             type: 'smoothstep',
             selected: edge.id === selectedEdgeId,
             animated: edge.relationship_type === 'POTENTIAL_SAME_IDENTITY',
+            /*
+             * An asserted link has no score to show. Printing a 0 next to it
+             * would read as "the evidence is weak" when the truth is that
+             * there is no engine evidence at all - a person vouched for it.
+             */
             label: labelled
-              ? `${edge.relationship_label} · ${Math.round(edge.confidence_score)}${
-                  edge.contradiction_count ? ` · ⚠${edge.contradiction_count}` : ''
-                }`
+              ? asserted
+                ? `${edge.relationship_label} · asserted`
+                : `${edge.relationship_label} · ${Math.round(
+                    edge.confidence_score,
+                  )}${edge.contradiction_count ? ` · ⚠${edge.contradiction_count}` : ''}`
               : undefined,
             labelShowBg: true,
             labelBgPadding: [4, 2] as [number, number],
@@ -213,9 +292,21 @@ export default function InvestigationGraph({
             labelStyle: { fill: 'var(--color-dim)', fontSize: 10 },
             style: {
               stroke: onPath ? 'var(--color-accent)' : color,
-              strokeWidth: onPath ? 3.5 : edge.id === selectedEdgeId ? 3 : 1.5,
-              strokeDasharray: rejected || contradictory ? '5 4' : undefined,
-              opacity: dimmed ? 0.12 : 1,
+              strokeWidth: onPath
+                ? 3.5
+                : edge.id === selectedEdgeId
+                  ? 3
+                  : candidate
+                    ? 1
+                    : asserted
+                      ? 2
+                      : 1.5,
+              strokeDasharray: candidate
+                ? '2 5'
+                : rejected || contradictory
+                  ? '5 4'
+                  : undefined,
+              opacity: dimmed ? 0.12 : candidate ? 0.45 : 1,
             },
           }
         }),
@@ -245,6 +336,20 @@ export default function InvestigationGraph({
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [layoutKey])
 
+  /*
+   * Dragging one node onto another proposes a link. The graph never writes it
+   * directly: the analyst has to say why first, and the dialog that asks is
+   * the page's business, not this component's.
+   */
+  const handleConnect = useCallback(
+    (connection: Connection) => {
+      if (!connection.source || !connection.target) return
+      if (connection.source === connection.target) return
+      onConnectRequest(connection.source, connection.target)
+    },
+    [onConnectRequest],
+  )
+
   const handleNodesChange = useCallback(
     (changes: NodeChange<Node>[]) => {
       changes.forEach((change) => {
@@ -263,6 +368,7 @@ export default function InvestigationGraph({
       edges={edges}
       nodeTypes={nodeTypes}
       onNodesChange={handleNodesChange}
+      onConnect={handleConnect}
       onNodeClick={(_, node) => onSelectNode(node.id)}
       onEdgeClick={(_, edge) => onSelectEdge(edge.id)}
       onPaneClick={() => {
@@ -286,8 +392,37 @@ export default function InvestigationGraph({
         showInteractive={false}
         className="rounded-md border border-line bg-panel"
       />
+      {/*
+        A graph of unconnected cards is confusing unless it says why. Nothing
+        has been ruled on yet, so nothing is drawn - and the two ways forward
+        are named rather than left to be discovered.
+      */}
+      {edges.length === 0 && nodes.length > 0 && (
+        <Panel position="top-center">
+          <div className="max-w-[420px] rounded-md border border-line bg-panel/95 px-3 py-2 text-center">
+            <div className="panel-title">No connections drawn yet</div>
+            <p className="mt-1 text-[11px] leading-snug text-dim">
+              This canvas shows the links you stand behind. Confirm an
+              association in the results list and it appears here — or drag one
+              entity onto another to draw the link yourself.
+            </p>
+            <p className="mt-1 text-[11px] leading-snug text-faint">
+              {graph.edges.length > 0 &&
+                `${graph.edges.length} candidate${
+                  graph.edges.length === 1 ? '' : 's'
+                } are waiting to be reviewed.`}
+            </p>
+          </div>
+        </Panel>
+      )}
+
       <Panel position="top-left">
-        <Legend shown={nodes.length} total={graph.nodes.length} />
+        <Legend
+          shown={nodes.length}
+          total={graph.nodes.length}
+          edges={edges.length}
+          showCandidates={showCandidates}
+        />
       </Panel>
 
       <MiniMap

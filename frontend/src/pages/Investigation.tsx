@@ -6,6 +6,7 @@ import EntityPanel from '../components/EntityPanel'
 import InvestigationHeader from '../components/InvestigationHeader'
 import type { WorkspaceView } from '../components/InvestigationHeader'
 import InvestigationGraph from '../components/InvestigationGraph'
+import LinkDialog from '../components/LinkDialog'
 import ResultsList from '../components/ResultsList'
 import RelationshipPanel from '../components/RelationshipPanel'
 import IdentityProfilePanel from '../components/IdentityProfilePanel'
@@ -18,6 +19,7 @@ import type {
   InvestigationDetail,
   InvestigationGraph as GraphPayload,
   PathHighlight,
+  RelationshipType,
 } from '../types'
 import { CONFIDENCE_ORDER, ENTITY_TYPES, RELATIONSHIP_TYPES } from '../lib/display'
 
@@ -78,6 +80,15 @@ export default function Investigation({ view }: Props) {
   const [busy, setBusy] = useState(false)
   const [tab, setTab] = useState<InspectorTab>('profile')
   const [highlight, setHighlight] = useState<PathHighlight | null>(null)
+  /*
+   * The canvas draws what the analyst stands behind. Candidates the engine
+   * has proposed live in the results list until they are ruled on; this
+   * reveals them on the graph for anyone who wants to work that way.
+   */
+  const [showCandidates, setShowCandidates] = useState(false)
+  // A pending link: two entity ids the analyst dragged together.
+  const [pendingLink, setPendingLink] = useState<[string, string] | null>(null)
+  const [linkError, setLinkError] = useState<string | null>(null)
   // Bumped whenever the graph changes, so the analysis panels refetch rather
   // than showing a profile computed from a stale graph.
   const [revision, setRevision] = useState(0)
@@ -113,6 +124,30 @@ export default function Investigation({ view }: Props) {
   }, [investigation, load])
 
   const recrawl = useCallback(async () => {
+    /*
+     * Re-running discovery resets the investigation, which deletes every
+     * entity - and with them any link the analyst drew by hand. That work has
+     * no other copy, so it is never thrown away silently.
+     */
+    try {
+      const existing = await api.getRelationships(id)
+      const drawn = existing.filter((item) => item.origin === 'ANALYST').length
+      if (
+        drawn > 0 &&
+        !window.confirm(
+          `Re-running discovery rebuilds this investigation from scratch and ` +
+            `will delete ${drawn} link${drawn === 1 ? '' : 's'} you drew by ` +
+            `hand, along with the reasons recorded with them. Nothing the ` +
+            `engine observed is lost — it is found again. Continue?`,
+        )
+      ) {
+        return
+      }
+    } catch {
+      // If the check itself fails, fall through rather than blocking the
+      // crawl: the warning is a courtesy, not a gate.
+    }
+
     setBusy(true)
     try {
       await api.crawl(id, { reset: true })
@@ -125,6 +160,31 @@ export default function Investigation({ view }: Props) {
       setBusy(false)
     }
   }, [id, load])
+
+  const createLink = useCallback(
+    async (type: RelationshipType, rationale: string) => {
+      if (!pendingLink) return
+      setBusy(true)
+      setLinkError(null)
+      try {
+        await api.createLink(id, {
+          source_entity_id: pendingLink[0],
+          target_entity_id: pendingLink[1],
+          relationship_type: type,
+          rationale,
+        })
+        setPendingLink(null)
+        await load()
+      } catch (cause) {
+        // Stays open with the reason: the analyst has typed a rationale and
+        // should not lose it to a conflict they can correct.
+        setLinkError((cause as Error).message)
+      } finally {
+        setBusy(false)
+      }
+    },
+    [id, load, pendingLink],
+  )
 
   const selectNode = useCallback((nodeId: string | null) => {
     setSelectedNodeId(nodeId)
@@ -272,6 +332,11 @@ export default function Investigation({ view }: Props) {
               <InvestigationGraph
                 graph={graph}
                 filters={filters}
+                showCandidates={showCandidates}
+                onConnectRequest={(source, target) => {
+                  setLinkError(null)
+                  setPendingLink([source, target])
+                }}
                 selectedNodeId={selectedNodeId}
                 selectedEdgeId={selectedEdgeId}
                 focusNodeId={focusNodeId}
@@ -304,6 +369,43 @@ export default function Investigation({ view }: Props) {
                 </div>
               </div>
             )
+          )}
+
+          {view === 'graph' && graph && graph.nodes.length > 0 && (
+            <div className="absolute right-3 top-3 z-10 flex items-center gap-2">
+              <button
+                onClick={() => setShowCandidates((value) => !value)}
+                className="rounded border bg-panel/95 px-2 py-1 font-mono text-[11px]"
+                style={{
+                  borderColor: showCandidates
+                    ? 'var(--color-accent)'
+                    : 'var(--color-line)',
+                  color: showCandidates
+                    ? 'var(--color-accent)'
+                    : 'var(--color-dim)',
+                }}
+                title="The engine's proposed links, which you have not ruled on yet"
+              >
+                {showCandidates ? 'hide candidates' : 'show candidates'}
+              </button>
+              <span className="rounded border border-line bg-panel/95 px-2 py-1 font-mono text-[11px] text-faint">
+                drag one node onto another to link them
+              </span>
+            </div>
+          )}
+
+          {pendingLink && graph && (
+            <LinkDialog
+              source={graph.nodes.find((node) => node.id === pendingLink[0])!}
+              target={graph.nodes.find((node) => node.id === pendingLink[1])!}
+              busy={busy}
+              error={linkError}
+              onCancel={() => {
+                setPendingLink(null)
+                setLinkError(null)
+              }}
+              onSubmit={createLink}
+            />
           )}
 
           {focusNodeId && view === 'graph' && (

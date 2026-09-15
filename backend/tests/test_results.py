@@ -223,3 +223,37 @@ async def test_the_endpoint_serves_the_same_list(client) -> None:
 
 async def test_an_unknown_investigation_is_a_404(client) -> None:
     assert client.get("/api/investigations/nope/results").status_code == 404
+
+
+async def test_a_drawn_link_does_not_take_over_an_evidence_backed_row(
+    repo, investigation
+) -> None:
+    """A hand-drawn link must not make a found account look unsupported.
+
+    Drawing a link counts as confirming it, and it scores zero. Without a
+    guard it would outrank an unreviewed edge carrying real evidence, and the
+    row would report "insufficient evidence" for an account the crawl found.
+    """
+    from app.models.relationship import Relationship
+    from app.services.results import _outranks
+
+    asserted = Relationship(
+        investigation_id=investigation.id,
+        source_entity_id="a",
+        target_entity_id="b",
+        relationship_type="POTENTIAL_SAME_IDENTITY",
+        confidence_score=0.0,
+        origin="ANALYST",
+        analyst_status=AnalystStatus.CONFIRMED,
+    )
+    observed = Relationship(
+        investigation_id=investigation.id,
+        source_entity_id="a",
+        target_entity_id="b",
+        relationship_type="POTENTIAL_SAME_IDENTITY",
+        confidence_score=70.0,
+        analyst_status=AnalystStatus.UNREVIEWED,
+    )
+
+    assert not _outranks(asserted, observed)
+    assert _outranks(observed, asserted)

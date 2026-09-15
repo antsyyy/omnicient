@@ -211,3 +211,19 @@ export const REASON_LABEL: Record<string, string> = {
   UNSUPPORTED: 'No adapter for this source',
   BUDGET_EXHAUSTED: 'The crawl budget was spent before reaching it',
 }
+
+// ---------------------------------------------------------------------------
+// Where a link came from
+// ---------------------------------------------------------------------------
+
+/**
+ * An analyst-drawn link is not a weak engine finding — it is a different kind
+ * of thing, resting on a person's judgement instead of an observation. It gets
+ * its own colour so it can never be read as a point on the confidence scale.
+ */
+export const ASSERTED_COLOR = 'var(--color-asserted)'
+
+export const ORIGIN_LABEL: Record<string, string> = {
+  ENGINE: 'Derived from evidence',
+  ANALYST: 'Asserted by an analyst',
+}

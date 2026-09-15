@@ -259,7 +259,18 @@ def _outcome_for_reason(reason: str | None) -> SourceOutcome:
 
 
 def _outranks(candidate: Relationship, current: Relationship) -> bool:
-    """Whether one relationship should represent an entity over another."""
+    """Whether one relationship should represent an entity over another.
+
+    A link an analyst drew never wins this contest against one the engine
+    derived. Drawing a link counts as confirming it, and it scores zero - so
+    without this rule a hand-drawn link would outrank an unreviewed edge
+    carrying real evidence, and the row would report "insufficient evidence"
+    for an account the crawl actually found. The row answers what the *source*
+    yielded; an assertion is not a source yield.
+    """
+    if candidate.is_analyst_asserted != current.is_analyst_asserted:
+        return current.is_analyst_asserted
+
     reviewed = {AnalystStatus.CONFIRMED, AnalystStatus.REJECTED}
     candidate_reviewed = str(candidate.analyst_status) in reviewed
     current_reviewed = str(current.analyst_status) in reviewed

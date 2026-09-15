@@ -213,6 +213,9 @@ export interface Relationship {
   relationship_label: string
   confidence_score: number
   confidence_level: ConfidenceLevel
+  origin: RelationshipOrigin
+  /** Whether a person drew this link rather than the engine deriving it. */
+  analyst_asserted: boolean
   analyst_status: AnalystStatus
   analyst_note: string | null
   reviewed_at: string | null
@@ -250,6 +253,14 @@ export interface GraphNode {
   position: { x: number; y: number }
 }
 
+/**
+ * Who asserted a relationship.
+ *
+ * An engine edge rests on observations; an analyst edge rests on a person's
+ * judgement. The interface must never draw the two identically.
+ */
+export type RelationshipOrigin = 'ENGINE' | 'ANALYST'
+
 export interface GraphEdge {
   id: string
   source: string
@@ -259,6 +270,7 @@ export interface GraphEdge {
   confidence_score: number
   confidence_level: ConfidenceLevel
   analyst_status: AnalystStatus
+  origin: RelationshipOrigin
   evidence_count: number
   contradiction_count: number
   summary: string | null
@@ -579,3 +591,25 @@ export interface SourceResults {
   found: number
   queried: number
 }
+
+/** Body of a request to draw a link by hand. */
+export interface ManualLinkInput {
+  source_entity_id: string
+  target_entity_id: string
+  relationship_type: RelationshipType
+  /** Required: an assertion nobody has to justify is not auditable. */
+  rationale: string
+}
+
+/**
+ * Relationship types an analyst may draw.
+ *
+ * Narrow on purpose. The rest name specific observations the engine made, and
+ * drawing one by hand would assert something that was never seen.
+ */
+export const ANALYST_LINKABLE_TYPES: RelationshipType[] = [
+  'POTENTIAL_SAME_IDENTITY',
+  'POTENTIAL_ALIAS',
+  'LINKS_TO',
+  'REFERENCES',
+]
