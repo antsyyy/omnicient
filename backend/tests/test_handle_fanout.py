@@ -196,3 +196,64 @@ def test_only_a_published_link_starts_a_new_search(explicit: bool) -> None:
     ]
     followed = [r for r in profile.references if r.explicit]
     assert bool(followed) is explicit
+
+
+# ---------------------------------------------------------------------------
+# Reporting progress while the crawl is still running
+# ---------------------------------------------------------------------------
+
+
+async def test_each_level_is_handed_over_as_it_completes() -> None:
+    """A crawl across two dozen sources takes half a minute.
+
+    The accounts on the first level are known within a few seconds of that,
+    and an analyst should be reading them rather than watching a spinner.
+    """
+    seen: list[int] = []
+    crawler, fetcher = build(make_handler([]))
+
+    async def on_level(partial) -> None:
+        seen.append(len(partial.entities))
+
+    outcome = await crawler.crawl(
+        "username", "prabhatacharya19", include_similarity=False, on_level=on_level
+    )
+    await fetcher.aclose()
+
+    assert len(seen) >= 2, "more than one level, so more than one handover"
+    assert seen == sorted(seen), "the count only ever grows"
+    assert seen[-1] == len(outcome.entities), "the last handover has everything"
+    assert seen[0] < seen[-1], "the first handover lands before the crawl ends"
+
+
+async def test_a_failing_progress_report_does_not_end_the_crawl() -> None:
+    """Reporting is a courtesy. Losing it must not lose the investigation."""
+    crawler, fetcher = build(make_handler([]))
+
+    async def explode(partial) -> None:
+        raise RuntimeError("the database went away")
+
+    outcome = await crawler.crawl(
+        "username", "prabhatacharya19", include_similarity=False, on_level=explode
+    )
+    await fetcher.aclose()
+
+    assert outcome.entities, "the crawl finished regardless"
+
+
+async def test_the_timeline_is_not_written_twice(repo) -> None:
+    """Events are created, not merged, so a flush must not repeat itself."""
+    from app.schemas.investigation import InvestigationCreate
+    from app.services.investigation import InvestigationService
+
+    service = InvestigationService(repo)
+    created = service.create(
+        InvestigationCreate(identifier="alice_98", platform="instagram", demo=True)
+    )
+    await service.run(created)
+
+    events = repo.list_events(created.id, limit=1000)
+    messages = [f"{e.event}:{e.message}" for e in events]
+    duplicated = {m for m in messages if messages.count(m) > 1}
+
+    assert not duplicated, f"timeline repeats: {sorted(duplicated)[:3]}"

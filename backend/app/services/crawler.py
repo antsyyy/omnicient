@@ -15,6 +15,7 @@ from __future__ import annotations
 
 import asyncio
 from collections import deque
+from collections.abc import Awaitable, Callable
 from dataclasses import dataclass, field
 from typing import Any
 
@@ -132,8 +133,17 @@ class Crawler:
         max_depth: int | None = None,
         max_pages: int | None = None,
         include_similarity: bool = True,
+        on_level: Callable[[CrawlOutcome], Awaitable[None]] | None = None,
     ) -> CrawlOutcome:
-        """Walk outward from a seed identifier and return what was observed."""
+        """Walk outward from a seed identifier and return what was observed.
+
+        ``on_level`` is awaited after each breadth-first level is folded in,
+        with the outcome so far. A crawl across two dozen sources takes long
+        enough that an analyst should not be watching a spinner while the
+        accounts are already known - this is what lets them be shown as they
+        are found. It runs at a level boundary rather than per source so the
+        partial results are still in deterministic candidate order.
+        """
         max_depth = self.settings.max_depth if max_depth is None else max_depth
         max_pages = self.settings.max_pages if max_pages is None else max_pages
 
@@ -299,6 +309,13 @@ class Crawler:
                         continue
                     queued.add(next_candidate.key)
                     queue.append(next_candidate)
+
+            # Hand over what this level found before starting the next one.
+            if on_level is not None:
+                try:
+                    await on_level(outcome)
+                except Exception:  # noqa: BLE001 - reporting must not end a crawl
+                    logger.warning("progress_callback_failed", exc_info=True)
 
         self._attach_email_domains(outcome)
         self._record(

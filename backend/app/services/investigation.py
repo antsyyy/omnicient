@@ -172,12 +172,30 @@ class InvestigationService:
         )
 
         registry = self._registry(investigation)
+        # Written out as the crawl goes, so an analyst sees accounts appear
+        # rather than a spinner. Events are CREATE-only, so the number already
+        # written is tracked; entities are a MERGE and can simply be
+        # re-persisted.
+        written_events = 0
+
+        async def publish(partial: CrawlOutcome) -> None:
+            nonlocal written_events
+            self._record_events(investigation, partial, offset=written_events)
+            written_events = len(partial.events)
+            self._persist_entities(investigation, partial, record_history=False)
+            entities, relationships, evidence = self.counts(investigation.id)
+            investigation.entity_count = entities
+            investigation.relationship_count = relationships
+            investigation.evidence_count = evidence
+            self.repo.save_investigation(investigation)
+
         try:
             outcome = await Crawler(registry, self.settings).crawl(
                 investigation.seed_platform,
                 investigation.seed_identifier,
                 max_depth=investigation.max_depth,
                 max_pages=investigation.max_pages,
+                on_level=publish,
             )
         except Exception as exc:  # noqa: BLE001 - surfaced, never crashes the app
             logger.exception("crawl_failed investigation=%s", investigation.id)
@@ -194,9 +212,8 @@ class InvestigationService:
         finally:
             await registry.aclose()
 
-        # The crawler buffers its timeline in memory; write it out before the
-        # analysis events so the activity log stays chronological.
-        self._record_events(investigation, outcome)
+        # Whatever the last level did not already flush.
+        self._record_events(investigation, outcome, offset=written_events)
 
         entity_map = self._persist_entities(investigation, outcome)
         evidence_count = self._persist_links(investigation, outcome, entity_map)
@@ -345,15 +362,26 @@ class InvestigationService:
     # -- persistence -------------------------------------------------------
 
     def _persist_entities(
-        self, investigation: Investigation, outcome: CrawlOutcome
+        self,
+        investigation: Investigation,
+        outcome: CrawlOutcome,
+        *,
+        record_history: bool = True,
     ) -> dict[tuple[str, str, str], Entity]:
-        """Store observed entities and write a snapshot for each observation."""
+        """Store observed entities and write a snapshot for each observation.
+
+        ``record_history`` is false while the crawl is still running. The
+        nodes themselves are a MERGE and can be written after every level
+        safely, but a snapshot is one observation and the timeline entry is
+        one line: writing either once per level would record the same
+        observation several times and repeat itself in the activity log.
+        """
         stored: dict[tuple[str, str, str], Entity] = {}
         snapshots: list[Snapshot] = []
         for observed in outcome.entities.values():
             entity = self._upsert_entity(investigation, observed)
             stored[observed.key] = entity
-            if observed.profile is not None:
+            if record_history and observed.profile is not None:
                 snapshots.append(
                     Snapshot(
                         entity_id=entity.id,
@@ -365,6 +393,9 @@ class InvestigationService:
                         meta={"source": observed.profile.source or observed.platform},
                     )
                 )
+        if not record_history:
+            return stored
+
         self.repo.add_snapshots(snapshots)
         self._event(
             investigation,
@@ -620,9 +651,14 @@ class InvestigationService:
         )
 
     def _record_events(
-        self, investigation: Investigation, outcome: CrawlOutcome
+        self, investigation: Investigation, outcome: CrawlOutcome, offset: int = 0
     ) -> None:
-        """Persist the crawler's buffered timeline in one round trip."""
+        """Persist the crawler's buffered timeline in one round trip.
+
+        ``offset`` skips the records already written by an earlier flush;
+        events are created rather than merged, so writing the whole buffer
+        again would duplicate the timeline.
+        """
         self.repo.add_events(
             [
                 CrawlEvent(
@@ -632,7 +668,7 @@ class InvestigationService:
                     level=record.level,
                     data=record.data,
                 )
-                for record in outcome.events
+                for record in outcome.events[offset:]
             ]
         )
 

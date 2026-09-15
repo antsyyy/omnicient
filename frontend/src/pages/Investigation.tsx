@@ -96,12 +96,16 @@ export default function Investigation({ view }: Props) {
   const load = useCallback(async () => {
     const detail = await api.getInvestigation(id)
     setInvestigation(detail)
-    if (!RUNNING.includes(detail.status)) {
-      setGraph(await api.getGraph(id))
-      // The analysis panels read the graph too; bumping this makes them
-      // refetch, so a confirm or reject is reflected everywhere at once.
-      setRevision((value) => value + 1)
-    }
+    /*
+     * The graph is read while the crawl is still running, not only after it
+     * finishes. The backend writes each level out as it completes, so an
+     * analyst watches accounts appear instead of a spinner - on two dozen
+     * sources the first results are known long before the last one answers.
+     */
+    setGraph(await api.getGraph(id))
+    // The analysis panels read the graph too; bumping this makes them
+    // refetch, so a confirm or reject is reflected everywhere at once.
+    setRevision((value) => value + 1)
     return detail
   }, [id])
 
@@ -274,8 +278,8 @@ export default function Investigation({ view }: Props) {
 
         <main className="relative min-w-0 flex-1">
           {running && (
-            <div className="absolute inset-0 z-10 flex items-center justify-center bg-void/85 backdrop-blur-[2px]">
-              <div className="w-[340px] rounded-lg border border-line bg-panel px-5 py-4">
+            <div className="absolute right-3 top-3 z-20">
+              <div className="w-[300px] rounded-lg border border-accent/40 bg-panel/95 px-4 py-3 shadow-lg">
                 <div className="font-mono text-[11px] uppercase tracking-[0.14em] text-accent">
                   Analyzing investigation
                 </div>
@@ -304,9 +308,13 @@ export default function Investigation({ view }: Props) {
                   })}
                 </ul>
                 <div className="mt-3 border-t border-line pt-2 font-mono text-[11px] text-dim">
-                  {investigation.entity_count} entities discovered
+                  {investigation.entity_count}{' '}
+                  {investigation.entity_count === 1 ? 'entity' : 'entities'} so far
                   <br />
                   {investigation.relationship_count} relationships analyzed
+                </div>
+                <div className="mt-1 text-[11px] leading-snug text-faint">
+                  Results below update as each source answers.
                 </div>
               </div>
             </div>
@@ -318,7 +326,12 @@ export default function Investigation({ view }: Props) {
             </div>
           )}
 
-          {view === 'list' && !running ? (
+          {/*
+            Shown while the crawl is still running, which is the point: the
+            backend writes each level out as it lands, so the rows fill in as
+            sources answer instead of appearing all at once at the end.
+          */}
+          {view === 'list' ? (
             <ResultsList
               investigationId={investigation.id}
               revision={revision}
