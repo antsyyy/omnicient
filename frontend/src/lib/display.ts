@@ -36,12 +36,20 @@ export const CONFIDENCE_ORDER: ConfidenceLevel[] = [
   'LOW',
 ]
 
+/**
+ * Entity types the graph draws, and therefore the ones its filter offers.
+ *
+ * ORGANIZATION is deliberately absent: an employer or a school is an
+ * attribute of a profile rather than an identity, and one Facebook Intro puts
+ * eight of them on the canvas. They are still collected, still scored, and
+ * still listed on the profile panel - a filter row for them would just be a
+ * control with nothing to control.
+ */
 export const ENTITY_TYPES: EntityType[] = [
   'ACCOUNT',
   'WEBSITE',
   'DOMAIN',
   'EMAIL',
-  'ORGANIZATION',
   // A bare handle seeds a USERNAME pivot node. Leaving it out of this list
   // filtered the seed off its own canvas: an investigation started from a
   // username drew every account it found and not the handle they came from.

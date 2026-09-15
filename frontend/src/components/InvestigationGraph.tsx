@@ -15,10 +15,8 @@ import {
   useReactFlow,
 } from '@xyflow/react'
 import EntityNode, { type EntityNodeData } from './EntityNode'
-import OrgClusterNode, { type OrgClusterData } from './OrgClusterNode'
 import type {
   FilterState,
-  GraphNode,
   InvestigationGraph as GraphPayload,
   PathHighlight,
 } from '../types'
@@ -40,7 +38,7 @@ function isEstablished(edge: GraphPayload['edges'][number]): boolean {
   return edge.analyst_status === 'CONFIRMED' || edge.origin === 'ANALYST'
 }
 
-const nodeTypes = { entity: EntityNode, orgCluster: OrgClusterNode }
+const nodeTypes = { entity: EntityNode }
 
 /**
  * What the drawing means.
@@ -52,13 +50,11 @@ function Legend({
   shown,
   total,
   edges,
-  clusters,
   showCandidates,
 }: {
   shown: number
   total: number
   edges: number
-  clusters: number
   showCandidates: boolean
 }) {
   return (
@@ -101,11 +97,6 @@ function Legend({
       <div className="mt-1.5 border-t border-line pt-1.5 font-mono text-[10px] text-faint">
         A dashed node was referenced but never read.
       </div>
-      {clusters > 0 && (
-        <div className="mt-1 font-mono text-[10px] text-faint">
-          Organizations are grouped by the profile that listed them.
-        </div>
-      )}
       <div className="mt-1 font-mono text-[10px] text-faint">
         {shown} of {total} entities · {edges}{' '}
         {edges === 1 ? 'connection' : 'connections'}
@@ -162,48 +153,6 @@ export default function InvestigationGraph({
   const { fitView } = useReactFlow()
   const dragged = useRef<Record<string, { x: number; y: number }>>({})
 
-  /*
-   * Organizations, gathered by the profile that listed them.
-   *
-   * The grouping reads every edge, not just the drawn ones: an organization
-   * is an attribute of the profile that published it, and which account
-   * listed it does not depend on whether an analyst has ruled on anything.
-   */
-  const orgGroups = useMemo(() => {
-    const parentOf = new Map<string, string>()
-    for (const edge of graph.edges) {
-      const target = graph.nodes.find((node) => node.id === edge.target)
-      if (target?.type === 'ORGANIZATION' && !parentOf.has(edge.target)) {
-        parentOf.set(edge.target, edge.source)
-      }
-    }
-    const groups = new Map<string, GraphNode[]>()
-    for (const node of graph.nodes) {
-      if (node.type !== 'ORGANIZATION') continue
-      const parent = parentOf.get(node.id)
-      // Nothing points at it, so there is no profile to gather it under. It
-      // keeps its own node rather than vanishing from the canvas.
-      if (!parent) continue
-      const members = groups.get(parent) ?? []
-      members.push(node)
-      groups.set(parent, members)
-    }
-    return groups
-  }, [graph.nodes, graph.edges])
-
-  /**
-   * Organizations drawn by a cluster rather than as nodes of their own.
-   *
-   * Every one that has a parent: an organization is never a loose node on
-   * this canvas, whatever the size of the group.
-   */
-  const collapsedOrgIds = useMemo(() => {
-    const hidden = new Set<string>()
-    for (const members of orgGroups.values()) {
-      for (const member of members) hidden.add(member.id)
-    }
-    return hidden
-  }, [orgGroups])
 
   /**
    * Edges that survive the current filter set.
@@ -243,13 +192,21 @@ export default function InvestigationGraph({
       new Set(
         graph.nodes
           .filter((node) => filters.entityTypes.has(node.type))
+          /*
+           * Organizations are not drawn here at all. An employer or a school
+           * is an attribute of a profile rather than an identity in its own
+           * right, and one Facebook Intro puts eight of them on the canvas -
+           * two thirds of the graph, as peers of the accounts they swamp.
+           * They are still collected, still scored as shared-organization
+           * evidence, and still listed on the profile panel; they are simply
+           * not nodes.
+           */
+          .filter((node) => node.type !== 'ORGANIZATION')
           .filter((node) =>
             node.confidence_level === null
               ? filters.showUnassociated
               : filters.confidenceLevels.has(node.confidence_level),
           )
-          // Members of a collapsed cluster are drawn by the cluster instead.
-          .filter((node) => !collapsedOrgIds.has(node.id))
           .map((node) => node.id),
       ),
     [
@@ -257,7 +214,6 @@ export default function InvestigationGraph({
       filters.entityTypes,
       filters.confidenceLevels,
       filters.showUnassociated,
-      collapsedOrgIds,
     ],
   )
 
@@ -292,58 +248,6 @@ export default function InvestigationGraph({
     [graph.nodes, visibleNodeIds, selectedNodeId, focusNeighbours, highlight],
   )
 
-  /** One node standing in for each collapsed group of organizations. */
-  const clusterNodes = useMemo<Node[]>(() => {
-    if (!filters.entityTypes.has('ORGANIZATION')) return []
-    const nodes: Node[] = []
-    for (const [parentId, members] of orgGroups) {
-      const parent = graph.nodes.find((node) => node.id === parentId)
-      if (!parent) continue
-      const id = `org-cluster:${parentId}`
-      /*
-       * In the arc its members just vacated.
-       *
-       * They sit next to each other on their ring - the layout groups a
-       * branch by angle - so collapsing them leaves a gap exactly the right
-       * size, and the cluster drops into it without colliding with anything
-       * still drawn. Averaging the coordinates instead would have put it at
-       * the ring's centre, which is where the seed is, and offsetting it from
-       * the parent landed it on top of the next ring out.
-       *
-       * The mean direction comes from summing unit vectors rather than
-       * averaging angles, so a group spanning the wrap-around at due west
-       * does not average to due east.
-       */
-      let ux = 0
-      let uy = 0
-      let radius = 0
-      for (const member of members) {
-        const distance =
-          Math.hypot(member.position.x, member.position.y) || 1
-        ux += member.position.x / distance
-        uy += member.position.y / distance
-        radius += distance
-      }
-      radius /= members.length
-      const spread = Math.hypot(ux, uy)
-      // Members ringed evenly all the way round have no mean direction worth
-      // trusting; fall back to just below the profile that listed them.
-      const x = spread > 0.001 ? (ux / spread) * radius : parent.position.x
-      const y =
-        spread > 0.001 ? (uy / spread) * radius : parent.position.y + 260
-      nodes.push({
-        id,
-        type: 'orgCluster',
-        position: dragged.current[id] ?? { x, y },
-        data: {
-          members,
-          sourceLabel: parent.label,
-          dimmed: focusNeighbours ? !focusNeighbours.has(parentId) : false,
-        } satisfies OrgClusterData,
-      })
-    }
-    return nodes
-  }, [orgGroups, graph.nodes, filters.entityTypes, focusNeighbours])
 
   /*
    * Edge labels are the first thing to overwhelm this diagram. On a small
@@ -440,53 +344,20 @@ export default function InvestigationGraph({
     ],
   )
 
-  /*
-   * A cluster hangs off the profile that listed it, and that edge is always
-   * drawn. It is not an association between two identities for an analyst to
-   * rule on - it is an attribute of one profile, the fact that this page
-   * published these names - so the confirm-to-connect rule does not apply to
-   * it. It is drawn muted, and never carries a confidence band.
-   */
-  const clusterEdges = useMemo<Edge[]>(
-    () =>
-      clusterNodes.map((cluster) => {
-        const parentId = cluster.id.slice("org-cluster:".length)
-        return {
-          id: `${cluster.id}:edge`,
-          source: parentId,
-          target: cluster.id,
-          type: 'smoothstep',
-          selectable: false,
-          style: {
-            stroke: 'var(--color-line-bright)',
-            strokeWidth: 1,
-            strokeDasharray: '3 4',
-          },
-        }
-      }),
-    [clusterNodes],
-  )
 
-  const allNodes = useMemo(
-    () => [...derivedNodes, ...clusterNodes],
-    [derivedNodes, clusterNodes],
-  )
-  const allEdges = useMemo(
-    () => [...derivedEdges, ...clusterEdges],
-    [derivedEdges, clusterEdges],
-  )
+  const [nodes, setNodes, onNodesChange] = useNodesState<Node>(derivedNodes)
+  const [edges, setEdges] = useEdgesState<Edge>(derivedEdges)
 
-  const [nodes, setNodes, onNodesChange] = useNodesState<Node>(allNodes)
-  const [edges, setEdges] = useEdgesState<Edge>(allEdges)
-
-  useEffect(() => setNodes(allNodes), [allNodes, setNodes])
-  useEffect(() => setEdges(allEdges), [allEdges, setEdges])
+  useEffect(() => setNodes(derivedNodes), [derivedNodes, setNodes])
+  useEffect(() => setEdges(derivedEdges), [derivedEdges, setEdges])
 
   // "Reset layout" clears remembered drags and refits the viewport.
   useEffect(() => {
     if (layoutKey > 0) {
       dragged.current = {}
-      setNodes(allNodes.map((node) => ({ ...node, position: { ...node.position } })))
+      setNodes(
+        derivedNodes.map((node) => ({ ...node, position: { ...node.position } })),
+      )
       window.setTimeout(() => fitView({ padding: 0.2, duration: 300 }), 30)
     }
     // eslint-disable-next-line react-hooks/exhaustive-deps
@@ -525,12 +396,7 @@ export default function InvestigationGraph({
       nodeTypes={nodeTypes}
       onNodesChange={handleNodesChange}
       onConnect={handleConnect}
-      onNodeClick={(_, node) => {
-        // A cluster stands for several entities, so there is no one entity
-        // for the inspector to open.
-        if (node.type === 'orgCluster') return
-        onSelectNode(node.id)
-      }}
+      onNodeClick={(_, node) => onSelectNode(node.id)}
       onEdgeClick={(_, edge) => onSelectEdge(edge.id)}
       onPaneClick={() => {
         onSelectNode(null)
@@ -584,10 +450,9 @@ export default function InvestigationGraph({
 
       <Panel position="top-left">
         <Legend
-          shown={derivedNodes.length + collapsedOrgIds.size}
+          shown={derivedNodes.length}
           total={graph.nodes.length}
           edges={derivedEdges.length}
-          clusters={clusterNodes.length}
           showCandidates={showCandidates}
         />
       </Panel>
@@ -597,11 +462,7 @@ export default function InvestigationGraph({
         zoomable
         maskColor="rgba(7, 10, 15, 0.82)"
         nodeColor={(node) => {
-          // Not every node on this canvas stands for one entity: a cluster
-          // stands for several and carries no confidence of its own. Reading
-          // through to `.node` unconditionally threw here, and a throw inside
-          // the minimap takes the whole page down with it.
-          if (node.type === 'orgCluster') return 'var(--color-line-bright)'
+          // A throw inside the minimap takes the whole page down with it.
           const data = node.data as EntityNodeData
           return data.node?.confidence_level
             ? CONFIDENCE_COLOR[data.node.confidence_level]
