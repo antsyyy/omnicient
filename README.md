@@ -509,19 +509,37 @@ what it describes. It collapses to a single row (the connection count stays
 visible), and the choice is remembered per browser: it is a key, not a
 control, and once an analyst has learned it they want the corner back.
 
-Edges are routed straight because the layout is radial: entities sit on rings
-around the seed, so a line between two of them is a spoke or a chord and reads
-as one. Labels appear on selection, on hover, and on relationships an analyst
-should not miss; labelling every edge produces a wall of text nobody reads.
+### The layout is a tree
+
+An investigation is a rooted, shallow thing — a starting handle and what was
+found from it — and a tree says that directly. The seed sits at the top, each
+hop is a level below the one before, and every card hangs from the card it was
+reached through, so depth reads down the screen. Each node is centred over its
+children, which keeps a branch together as one shape.
+
+Levels are **hop distance from the seed, not crawl depth.** They usually agree,
+but a bare handle asks every source about itself at depth zero, so depth alone
+would put the seed shoulder to shoulder with the two dozen accounts it found.
+
+The cost of a tree is width: a wide fan-out is a wide row. A crowded level is
+therefore stepped alternately up and down, which keeps labels apart and lets
+cards sit closer than a dead-straight row allows — and level baselines
+accumulate rather than multiply, so a stepped level does not eat the gap below
+it. Entities no relationship reaches are parked in a grid underneath the tree
+rather than hung off the root, since drawing them as children would assert a
+parentage that does not exist.
+
+Edges are routed straight, which suits a tree: a line runs from a parent down
+to a child and reads as one stroke. Labels appear on selection, on hover, and
+on relationships an analyst should not miss; labelling every edge produces a
+wall of text nobody reads.
 
 ### Staying legible as it grows
 
 A category holding thirty entities becomes a 900px column that dominates the
 board and cannot be read anyway, so cards cap at ten rows with `+N more`, and
 rows past the cap anchor their edges to the card. Categories collapse to a
-header and a count. The ring radius is solved against the circle enclosing the
-tallest card, which is what stops two tall cards meeting corner to corner —
-measuring against width or height alone lets them overlap.
+header and a count.
 
 Layout is deterministic: the same investigation always produces the same
 board, so *reset layout* returns the analyst to the arrangement they knew.

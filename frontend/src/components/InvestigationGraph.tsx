@@ -580,9 +580,15 @@ export default function InvestigationGraph({
         onSelectEdge(null)
       }}
       fitView
-      // Generous padding because the legend, the hint and the minimap all
-      // float over the canvas; a tight fit tucks nodes underneath them.
-      fitViewOptions={{ padding: 0.32 }}
+      /*
+       * Padding tight enough to keep the cards readable. It was 0.32, which
+       * cost a third of the canvas on each side - tolerable when the layout
+       * was a compact ring and expensive now the tree is wider than it is
+       * tall, because the fit is bound by width and every wasted pixel comes
+       * straight off the zoom. The legend it was making room for folds away
+       * on its own now.
+       */
+      fitViewOptions={{ padding: 0.18 }}
       minZoom={0.15}
       maxZoom={2}
       proOptions={{ hideAttribution: true }}

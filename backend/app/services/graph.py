@@ -12,7 +12,6 @@ processing library, not a store: the source of truth stays in Neo4j.
 
 from __future__ import annotations
 
-import math
 from datetime import UTC, datetime
 
 import networkx as nx
@@ -35,11 +34,22 @@ from ..utils.normalization import platform_label
 logger = get_logger(__name__)
 
 # Layout spacing in React Flow pixels.
-#: Distance between one ring and the next.
-RING_GAP = 320
-#: Minimum gap between neighbours on a ring, so a card cannot overlap the one
-#: beside it. A node is about 200px wide; this leaves a little air.
-MIN_ARC = 250
+#: Vertical distance between one hop level and the next.
+LEVEL_GAP = 280
+#: Horizontal distance between neighbouring cards. A node is about 200px
+#: wide; this leaves a little air.
+NODE_GAP = 240
+#: A level with more members than this is stepped up and down alternately.
+#: A bare handle asks two dozen sources about itself, and two dozen cards in
+#: one dead-straight row run out of screen long before they run out of
+#: content - the stagger lets the eye follow a line of them and keeps the
+#: labels from crowding, without giving up the shape of a tree.
+STAGGER_ABOVE = 6
+#: How far a stepped node moves off its level.
+STAGGER_STEP = 120
+#: Entities no relationship reaches are parked below the tree in a grid, this
+#: many to a row, rather than being hung off a root they have no edge to.
+ORPHAN_COLUMNS = 6
 
 
 class GraphService:
@@ -139,20 +149,24 @@ class GraphService:
 
     @staticmethod
     def _layout(graph: nx.Graph, entities: list[Entity]) -> dict[str, dict[str, float]]:
-        """Radial layout: the seed at the centre, everything else around it.
+        """Tidy tree: the seed on top, each hop a level below the one before.
 
-        An investigation graph is rooted and shallow, which is exactly what a
-        radial tree is for.  Laying each depth out as a row instead put a bare
-        handle's two dozen accounts in a single strip thousands of pixels
-        wide - the analyst had to pan from one end to the other to read one
-        level, and the seed those accounts came from sat off to one side of
-        it rather than at the middle of the thing it started.
+        An investigation is a rooted, shallow thing - a starting handle and
+        what was found from it - and a tree says that directly: the seed is
+        the thing at the top, every card below it was reached from the card
+        above, and depth reads down the screen.
 
-        Rings are hop distance from the seed, not crawl depth.  They usually
-        agree, but a bare handle asks every source about itself at depth zero,
-        so depth alone would put the seed shoulder to shoulder with the two
-        dozen accounts it found.  Children are placed near their parent's
-        angle, so a branch stays together and the picture reads outward.
+        Levels are hop distance from the seed, not crawl depth. They usually
+        agree, but a bare handle asks every source about itself at depth
+        zero, so depth alone would put the seed shoulder to shoulder with the
+        two dozen accounts it found.
+
+        Each node sits centred over its children, so a branch reads as one
+        shape and a parent is always findable from the cards under it. The
+        cost of a tree is width - a wide fan-out is a wide row, which is what
+        the radial layout this replaces was avoiding - so a crowded level is
+        stepped alternately up and down, which keeps the labels apart and
+        lets the cards sit closer together than a dead-straight row allows.
         """
         if not entities:
             return {}
@@ -170,59 +184,110 @@ class GraphService:
         )
 
         # Hop distance from the seed, and the neighbour each node was reached
-        # through - which is what lets a branch be kept together.
+        # through - which is what makes the parent-child structure a tree.
         hops: dict[str, int] = {root: 0}
         parent: dict[str, str] = {}
         if graph.has_node(root):
-            for node_id, distance in nx.single_source_shortest_path_length(
-                graph, root
-            ).items():
-                hops[node_id] = distance
             for node_id, path in nx.single_source_shortest_path(graph, root).items():
+                hops[node_id] = len(path) - 1
                 if len(path) > 1:
                     parent[node_id] = path[-2]
 
-        # Anything the relationships do not reach still has to be drawn. Its
-        # crawl depth is the honest answer, one ring further out than a node
-        # that is genuinely connected at that depth.
-        for entity in entities:
-            hops.setdefault(entity.id, entity.depth + 1)
+        def rank(node_id: str) -> tuple:
+            """Deterministic sibling order: busiest first, then by id."""
+            degree = graph.degree(node_id) if graph.has_node(node_id) else 0
+            return (-degree, node_id)
 
-        rings: dict[int, list[str]] = {}
-        for node_id, ring in hops.items():
+        children: dict[str, list[str]] = {}
+        for node_id, mother in parent.items():
             if node_id in by_id:
-                rings.setdefault(ring, []).append(node_id)
+                children.setdefault(mother, []).append(node_id)
+        for siblings in children.values():
+            siblings.sort(key=rank)
 
-        positions: dict[str, dict[str, float]] = {root: {"x": 0.0, "y": 0.0}}
-        angles: dict[str, float] = {root: 0.0}
-
-        for ring in sorted(rings):
-            if ring == 0:
+        # Post-order walk, iteratively: a leaf takes the next free column, a
+        # parent centres itself over the children already placed. Recursion
+        # would be fine at the depths a crawl reaches, but the traversal is
+        # the part worth being explicit about.
+        columns: dict[str, float] = {}
+        cursor = 0.0
+        stack: list[tuple[str, bool]] = [(root, False)]
+        seen: set[str] = set()
+        while stack:
+            node_id, expanded = stack.pop()
+            kids = children.get(node_id, [])
+            if not kids:
+                columns[node_id] = cursor
+                cursor += NODE_GAP
                 continue
-            members = rings[ring]
-            # Keep a branch together: sort by where the parent sits, and put
-            # the busiest nodes first so the ring order is stable run to run.
-            members.sort(
-                key=lambda node_id: (
-                    angles.get(parent.get(node_id, root), 0.0),
-                    -(graph.degree(node_id) if graph.has_node(node_id) else 0),
-                    node_id,
-                )
+            if not expanded:
+                if node_id in seen:
+                    continue
+                seen.add(node_id)
+                stack.append((node_id, True))
+                # Reversed so the sorted order comes off the stack intact.
+                stack.extend((kid, False) for kid in reversed(kids))
+                continue
+            placed = [columns[kid] for kid in kids if kid in columns]
+            columns[node_id] = (
+                (min(placed) + max(placed)) / 2 if placed else cursor
             )
-            # Wide enough that neighbours cannot overlap, and no wider: the
-            # ring has to seat every node at MIN_ARC apart around it.
-            radius = max(
-                RING_GAP * ring,
-                len(members) * MIN_ARC / (2 * math.pi),
-            )
-            step = 2 * math.pi / len(members)
-            for index, node_id in enumerate(members):
-                angle = index * step
-                angles[node_id] = angle
+
+        # Step crowded levels so a wide fan-out stays readable.
+        levels: dict[int, list[str]] = {}
+        for node_id in columns:
+            levels.setdefault(hops.get(node_id, 0), []).append(node_id)
+
+        offsets: dict[str, float] = {}
+        stepped: set[int] = set()
+        for level, members in levels.items():
+            if level == 0 or len(members) <= STAGGER_ABOVE:
+                continue
+            stepped.add(level)
+            for index, node_id in enumerate(sorted(members, key=columns.get)):
+                offsets[node_id] = STAGGER_STEP if index % 2 else 0.0
+
+        # Level baselines, accumulated rather than multiplied, because a
+        # stepped level is taller than an unstepped one. Spacing them evenly
+        # and then stepping into the gap put a dropped card 160px above the
+        # level below - closer to a stranger's child than to its own siblings.
+        baseline: dict[int, float] = {}
+        offset = 0.0
+        for level in sorted(levels):
+            baseline[level] = offset
+            offset += LEVEL_GAP + (STAGGER_STEP if level in stepped else 0.0)
+
+        # The seed anchors the picture at the origin.
+        origin = columns.get(root, 0.0)
+        positions = {
+            node_id: {
+                "x": round(column - origin, 2),
+                "y": round(
+                    baseline.get(hops.get(node_id, 0), 0.0)
+                    + offsets.get(node_id, 0.0),
+                    2,
+                ),
+            }
+            for node_id, column in columns.items()
+        }
+
+        # Entities no relationship reaches are not part of the tree, and
+        # hanging them off the root would draw a parentage that does not
+        # exist. They are parked in a grid underneath it instead, which is
+        # honest about their being unattached and still puts them on screen.
+        loose = sorted(
+            (entity.id for entity in entities if entity.id not in positions),
+            key=rank,
+        )
+        if loose:
+            floor = max((point["y"] for point in positions.values()), default=0.0)
+            for index, node_id in enumerate(loose):
+                row, column = divmod(index, ORPHAN_COLUMNS)
                 positions[node_id] = {
-                    "x": round(radius * math.cos(angle), 2),
-                    "y": round(radius * math.sin(angle), 2),
+                    "x": round((column - (ORPHAN_COLUMNS - 1) / 2) * NODE_GAP, 2),
+                    "y": round(floor + LEVEL_GAP * (1.5 + row), 2),
                 }
+
         return positions
 
     @staticmethod

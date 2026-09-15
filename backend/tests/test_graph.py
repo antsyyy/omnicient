@@ -161,8 +161,8 @@ async def test_analyst_decision_is_preserved_across_recrawl(repo, investigation)
 # ---------------------------------------------------------------------------
 
 
-async def test_the_seed_sits_at_the_centre(repo) -> None:
-    """An investigation radiates from the thing it started with."""
+async def test_the_seed_sits_at_the_top(repo) -> None:
+    """An investigation hangs from the thing it started with."""
     from app.schemas.investigation import InvestigationCreate
     from app.services.graph import GraphService
     from app.services.investigation import InvestigationService
@@ -179,12 +179,13 @@ async def test_the_seed_sits_at_the_centre(repo) -> None:
     assert (seed.position.x, seed.position.y) == (0.0, 0.0)
 
 
-async def test_nodes_ring_the_seed_rather_than_forming_a_strip(repo) -> None:
-    """The old layered layout put a whole depth in one very wide row.
+async def test_the_tree_grows_downward_from_the_seed(repo) -> None:
+    """Hop distance reads down the screen, and only downward.
 
-    A bare handle asks two dozen sources about itself, so that row ran
-    thousands of pixels wide and the analyst had to pan from one end to the
-    other to read a single level.
+    The layout is a tree now rather than a ring, so the property worth
+    holding is the one a tree promises: everything reached from the seed is
+    below it, and a card is below the card it was reached through. A row that
+    drifts upward would say the crawl went the other way.
     """
     from app.schemas.investigation import InvestigationCreate
     from app.services.graph import GraphService
@@ -197,14 +198,32 @@ async def test_nodes_ring_the_seed_rather_than_forming_a_strip(repo) -> None:
     await service.run(created)
 
     graph = GraphService(repo).build(created)
-    xs = [node.position.x for node in graph.nodes]
-    ys = [node.position.y for node in graph.nodes]
-    width = max(xs) - min(xs)
-    height = max(ys) - min(ys)
+    seed = next(node for node in graph.nodes if node.is_seed)
+    by_id = {node.id: node for node in graph.nodes}
 
-    assert height > 0, "a strip has no height at all"
-    # Roughly square rather than a ribbon.
-    assert 0.4 < width / height < 2.5, f"{width:.0f}x{height:.0f} is not radial"
+    assert all(node.position.y >= seed.position.y for node in graph.nodes)
+    assert max(node.position.y for node in graph.nodes) > seed.position.y
+
+    # Everything the seed touches hangs below it, strictly - the one
+    # parent-child relationship the payload states plainly enough to check.
+    kin = [
+        by_id[edge.target if edge.source == seed.id else edge.source]
+        for edge in graph.edges
+        if seed.id in (edge.source, edge.target)
+    ]
+    assert kin, "the seed should be connected to something"
+    for node in kin:
+        assert node.position.y > seed.position.y, (
+            f"{node.label} was reached from the seed but is drawn level with "
+            "it or above it"
+        )
+
+    # And a parent sits over its children rather than off to one side.
+    if len(kin) > 1:
+        xs = [node.position.x for node in kin]
+        assert min(xs) <= seed.position.x <= max(xs), (
+            "the seed is not centred over what it found"
+        )
 
 
 async def test_no_two_nodes_are_drawn_on_top_of_each_other(repo) -> None:
