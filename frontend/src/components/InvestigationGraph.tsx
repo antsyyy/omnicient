@@ -356,6 +356,18 @@ export default function InvestigationGraph({
               ? filters.showUnassociated
               : filters.confidenceLevels.has(node.confidence_level),
           )
+          /*
+           * An entity an analyst ruled a different party. Kept on the canvas
+           * by default and struck through rather than dropped: the ruling is
+           * a judgement, not a delete, and one they cannot see is one they
+           * cannot reconsider. The seed is exempt on the server, so there is
+           * no danger of this emptying the canvas from the root.
+           */
+          .filter(
+            (node) =>
+              node.analyst_verdict !== 'DIFFERENT_IDENTITY' ||
+              filters.showDifferentIdentity,
+          )
           .map((node) => node.id),
       ),
     [
@@ -363,6 +375,7 @@ export default function InvestigationGraph({
       filters.entityTypes,
       filters.confidenceLevels,
       filters.showUnassociated,
+      filters.showDifferentIdentity,
     ],
   )
 

@@ -18,6 +18,107 @@ interface Props {
   onClose: () => void
   onToggleFocus: (entityId: string) => void
   onSelectRelationship: (relationshipId: string) => void
+  /** Re-read the graph, so the canvas picks up a ruling straight away. */
+  onEntityChanged?: () => void
+}
+
+/**
+ * Rule that an account belongs to somebody else, or take the ruling back.
+ *
+ * The one place a person may assert an identity in this system, so it says
+ * out loud what it does and does not do. It is a judgement, recorded as the
+ * analyst's; it deletes nothing; and the note is the only thing that makes it
+ * reviewable later, which is why it is asked for rather than assumed.
+ *
+ * The seed has no control at all. It is what the investigation is about, the
+ * server refuses to rule it out, and offering a button that always fails is
+ * worse than offering none.
+ */
+function IdentityRuling({
+  entity,
+  onChanged,
+}: {
+  entity: EntityDetail
+  onChanged: (updated: EntityDetail) => void
+}) {
+  const [note, setNote] = useState('')
+  const [busy, setBusy] = useState(false)
+  const [failed, setFailed] = useState<string | null>(null)
+  const ruledOut = entity.analyst_verdict === 'DIFFERENT_IDENTITY'
+
+  if (entity.is_seed) return null
+
+  async function run(action: () => Promise<EntityDetail>) {
+    setBusy(true)
+    setFailed(null)
+    try {
+      onChanged(await action())
+      setNote('')
+    } catch (cause) {
+      setFailed((cause as Error).message)
+    } finally {
+      setBusy(false)
+    }
+  }
+
+  if (ruledOut) {
+    return (
+      <div className="rounded border border-rejected/40 bg-rejected/5 px-2.5 py-2">
+        <div className="panel-title text-rejected">Different identity</div>
+        <p className="mt-1 text-[11px] leading-snug text-dim">
+          You judged this to be somebody else.
+          {entity.reviewed_at && ` Recorded ${formatDate(entity.reviewed_at)}.`}
+        </p>
+        {entity.analyst_note && (
+          <p className="mt-1 border-l border-line pl-2 text-[11px] leading-snug text-faint">
+            {entity.analyst_note}
+          </p>
+        )}
+        <p className="mt-1 text-[11px] leading-snug text-faint">
+          Nothing was deleted — the evidence below still stands, and the filter
+          panel can take it off the canvas.
+        </p>
+        <button
+          disabled={busy}
+          onClick={() => run(() => api.resetEntityIdentity(entity.id))}
+          className="mt-2 rounded border border-line px-2 py-1 font-mono text-[11px] text-dim hover:text-ink disabled:opacity-50"
+        >
+          {busy ? 'working…' : 'undo this ruling'}
+        </button>
+        {failed && <p className="mt-1 text-[11px] text-rejected">{failed}</p>}
+      </div>
+    )
+  }
+
+  return (
+    <details className="rounded border border-line bg-raised px-2.5 py-2">
+      <summary className="cursor-pointer font-mono text-[11px] text-faint hover:text-ink">
+        not the same person?
+      </summary>
+      <p className="mt-1.5 text-[11px] leading-snug text-faint">
+        Records your judgement that this account belongs to a different party.
+        It deletes nothing and can be undone.
+      </p>
+      <textarea
+        value={note}
+        onChange={(event) => setNote(event.target.value)}
+        maxLength={2000}
+        rows={2}
+        placeholder="Why? e.g. different city and employer, handle is a common name"
+        className="mt-1.5 w-full rounded border border-line bg-panel px-2 py-1 text-[11px] text-ink placeholder:text-faint"
+      />
+      <button
+        disabled={busy}
+        onClick={() =>
+          run(() => api.markDifferentIdentity(entity.id, note.trim() || undefined))
+        }
+        className="mt-1.5 rounded border border-rejected/50 px-2 py-1 font-mono text-[11px] text-rejected hover:bg-rejected/10 disabled:opacity-50"
+      >
+        {busy ? 'working…' : 'mark as different identity'}
+      </button>
+      {failed && <p className="mt-1 text-[11px] text-rejected">{failed}</p>}
+    </details>
+  )
 }
 
 function Field({ label, children }: { label: string; children: React.ReactNode }) {
@@ -39,6 +140,7 @@ export default function EntityPanel({
   onClose,
   onToggleFocus,
   onSelectRelationship,
+  onEntityChanged,
 }: Props) {
   const [entity, setEntity] = useState<EntityDetail | null>(null)
   const [relationships, setRelationships] = useState<Relationship[]>([])
@@ -108,6 +210,14 @@ export default function EntityPanel({
             public profile could be read for it.
           </div>
         )}
+
+        <IdentityRuling
+          entity={entity}
+          onChanged={(updated) => {
+            setEntity(updated)
+            onEntityChanged?.()
+          }}
+        />
 
         {entity.bio && <Field label="Bio">{entity.bio}</Field>}
         {entity.location && <Field label="Location">{entity.location}</Field>}

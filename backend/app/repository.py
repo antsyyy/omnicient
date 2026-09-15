@@ -35,7 +35,12 @@ from typing import Any
 from neo4j import Session
 
 from .models.entity import Entity, type_label
-from .models.enums import AnalystStatus, RelationshipOrigin, RelationshipType
+from .models.enums import (
+    AnalystStatus,
+    EntityVerdict,
+    RelationshipOrigin,
+    RelationshipType,
+)
 from .models.evidence import Evidence
 from .models.investigation import CrawlEvent, Investigation
 from .models.relationship import Relationship
@@ -680,6 +685,47 @@ class Neo4jRepository:
             unreviewed=str(AnalystStatus.UNREVIEWED),
         ).single()
         return Relationship.from_edge(record["r"]) if record else None
+
+    def set_entity_verdict(
+        self, entity_id: str, verdict: str, note: str | None
+    ) -> Entity | None:
+        """Record an analyst's ruling that an entity is, or is not, somebody else.
+
+        Writes only the three verdict properties. A re-crawl overwrites the
+        observed fields of an entity it finds again, and it must not touch
+        these - an analyst who ruled out a namesake should not have to rule it
+        out again every time the investigation is re-run.
+        """
+        record = self.session.run(
+            """
+            MATCH (e:Entity {id: $id})
+            SET e.analyst_verdict = $verdict,
+                e.analyst_note = CASE WHEN $note IS NULL
+                                      THEN e.analyst_note ELSE $note END,
+                e.reviewed_at = CASE WHEN $verdict = $unreviewed
+                                     THEN NULL ELSE datetime() END,
+                e.updated_at = datetime()
+            RETURN e
+            """,
+            id=entity_id,
+            verdict=str(verdict),
+            note=note,
+            unreviewed=str(EntityVerdict.UNREVIEWED),
+        ).single()
+        return Entity.from_node(record["e"]) if record else None
+
+    def entity_verdict_counts(self, investigation_id: str) -> dict[str, int]:
+        """``{verdict: count}`` across an investigation's entities."""
+        result = self.session.run(
+            """
+            MATCH (e:Entity {investigation_id: $id})
+            RETURN coalesce(e.analyst_verdict, $unreviewed) AS verdict,
+                   count(e) AS total
+            """,
+            id=investigation_id,
+            unreviewed=str(EntityVerdict.UNREVIEWED),
+        )
+        return {record["verdict"]: record["total"] for record in result}
 
     def analyst_status_counts(self, investigation_id: str) -> dict[str, int]:
         """``{status: count}`` across an investigation's relationships."""

@@ -509,6 +509,39 @@ what it describes. It collapses to a single row (the connection count stays
 visible), and the choice is remembered per browser: it is a key, not a
 control, and once an analyst has learned it they want the corner back.
 
+### Ruling an entity out
+
+A crawl that searches a handle finds everyone who uses it, and some of them
+are other people. The analyst can say so: **mark as different identity**
+records that an account belongs to a different party — a namesake, a reused
+handle, a coincidence the evidence happened to surface.
+
+This is the only identity claim the system stores, and it is stored as what it
+is: an analyst's assertion, with their reasoning, timestamped. The engine never
+sets it. It is separate from the confirm/reject verdict on a *relationship*,
+which rules on whether evidence supports an association between two entities;
+this rules on the entity itself.
+
+**It deletes nothing.** The account, its observations, its evidence and its
+relationships all survive, and the ruling can be undone — because the analyst
+may be wrong, and a later reviewer has to be able to see what was ruled out and
+why. On the canvas the card is muted, its border goes dashed red, the handle is
+struck through and the confidence band is replaced by `DIFFERENT IDENTITY`: a
+band describes how strongly the *engine* associated an entity, and once a
+person has said it is not the same party, that number answers a question nobody
+is asking. A filter row under **Your rulings** takes them off the canvas for
+anyone who wants them out of the way — it appears only once there is something
+in it.
+
+The seed cannot be ruled out. It is what the investigation is about rather than
+a finding in it, and ruling it out would leave an investigation of nobody with
+every other entity still hanging off it. The API returns 409 and the interface
+offers no control.
+
+The verdict survives a re-crawl. A re-run re-observes every entity it finds and
+overwrites the observed fields; if it overwrote this too, an analyst would have
+to rule out the same namesake after every run.
+
 ### The layout is a tree
 
 An investigation is a rooted, shallow thing — a starting handle and what was

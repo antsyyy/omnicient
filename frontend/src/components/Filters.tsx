@@ -14,6 +14,8 @@ interface Props {
     /** Entities per band, and how many nothing has associated yet. */
     byConfidence: Record<string, number>
     unassociated: number
+    /** Entities an analyst has ruled a different party. */
+    differentIdentity: number
   }
   onChange: (next: FilterState) => void
 }
@@ -119,6 +121,33 @@ export default function Filters({ filters, counts, onChange }: Props) {
           The band of the strongest association touching an entity.
         </p>
       </section>
+
+      {/*
+        Only worth a section once there is something in it. An analyst who has
+        never ruled anybody out does not need a control for it, and a row
+        reading "0" is one more thing to read past on every investigation.
+      */}
+      {counts.differentIdentity > 0 && (
+        <section>
+          <div className="panel-title mb-1">Your rulings</div>
+          <Row
+            label="Different identity"
+            color="var(--color-rejected)"
+            checked={filters.showDifferentIdentity}
+            count={counts.differentIdentity}
+            onToggle={() =>
+              onChange({
+                ...filters,
+                showDifferentIdentity: !filters.showDifferentIdentity,
+              })
+            }
+          />
+          <p className="mt-1 text-[11px] leading-snug text-faint">
+            Entities you judged to be somebody else. Nothing was deleted —
+            uncheck to take them off the canvas.
+          </p>
+        </section>
+      )}
     </div>
   )
 }

@@ -7,7 +7,7 @@ from typing import Any
 
 from pydantic import AliasChoices, BaseModel, ConfigDict, Field, computed_field
 
-from ..models.enums import DiscoveryMethod, EntityType
+from ..models.enums import DiscoveryMethod, EntityType, EntityVerdict
 from ..utils.normalization import platform_label
 
 
@@ -57,6 +57,10 @@ class EntityRead(BaseModel):
     is_seed: bool = False
     resolved: bool = False
 
+    analyst_verdict: EntityVerdict = EntityVerdict.UNREVIEWED
+    analyst_note: str | None = None
+    reviewed_at: datetime | None = None
+
     first_seen: datetime
     last_seen: datetime
     created_at: datetime
@@ -103,3 +107,19 @@ class EntitySummary(BaseModel):
     @property
     def platform_name(self) -> str:
         return platform_label(self.platform)
+
+
+class EntityIdentityDecision(BaseModel):
+    """Body of a mark-as-different-identity request.
+
+    The note is where the analyst says *why* - "different city, different
+    employer, handle is a common name". Optional, and strongly worth filling
+    in: the verdict is the one identity claim this system stores, so the
+    reason for it is the only thing that makes it reviewable later.
+    """
+
+    note: str | None = Field(
+        default=None,
+        max_length=2000,
+        description="Why the analyst judged this a different party.",
+    )

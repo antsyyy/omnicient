@@ -30,6 +30,17 @@ export type ConfidenceLevel = 'LOW' | 'MEDIUM' | 'HIGH' | 'VERY_HIGH' | 'INSUFFI
 
 export type AnalystStatus = 'UNREVIEWED' | 'CONFIRMED' | 'REJECTED'
 
+/**
+ * An analyst's ruling that an entity belongs to somebody else.
+ *
+ * Separate from AnalystStatus, which rules on a relationship - whether the
+ * evidence between two entities supports an association. This rules on the
+ * entity: a namesake, a reused handle, an account established to be another
+ * party. It is the only identity claim the system stores, the engine never
+ * sets it, and it deletes nothing.
+ */
+export type EntityVerdict = 'UNREVIEWED' | 'DIFFERENT_IDENTITY'
+
 export type DiscoveryMethod = 'SEED' | 'DIRECT' | 'INDIRECT' | 'SIMILARITY' | 'DEMO'
 
 export type InvestigationStatus =
@@ -152,6 +163,9 @@ export interface Entity {
   depth: number
   is_seed: boolean
   resolved: boolean
+  analyst_verdict: EntityVerdict
+  analyst_note: string | null
+  reviewed_at: string | null
   first_seen: string
   last_seen: string
   created_at: string
@@ -251,6 +265,8 @@ export interface GraphNode {
   depth: number
   discovery_method: DiscoveryMethod
   degree: number
+  analyst_verdict: EntityVerdict
+  analyst_note: string | null
   confidence_level: ConfidenceLevel | null
   confidence_score: number | null
   position: { x: number; y: number }
@@ -341,6 +357,15 @@ export interface FilterState {
   confidenceLevels: Set<ConfidenceLevel>
   /** Keep entities that no association touches yet - the seed, and misses. */
   showUnassociated: boolean
+  /**
+   * Keep entities an analyst has ruled a different party.
+   *
+   * On by default. Ruling one out is a judgement, not a delete, and an
+   * analyst who cannot see what they ruled out cannot change their mind
+   * about it - so the canvas strikes them through and this hides them only
+   * when asked.
+   */
+  showDifferentIdentity: boolean
 }
 
 // ---------------------------------------------------------------------------

@@ -169,6 +169,22 @@ export const api = {
       body: JSON.stringify({ note: note ?? null }),
     }),
 
+  /**
+   * Rule that an entity belongs to somebody else.
+   *
+   * An analyst's assertion, and the only identity claim the system stores.
+   * It deletes nothing: the account, its observations and its evidence all
+   * survive, and `resetEntityIdentity` undoes it.
+   */
+  markDifferentIdentity: (id: string, note?: string) =>
+    request<EntityDetail>(`/entities/${id}/different-identity`, {
+      method: 'POST',
+      body: JSON.stringify({ note: note ?? null }),
+    }),
+
+  resetEntityIdentity: (id: string) =>
+    request<EntityDetail>(`/entities/${id}/reset-identity`, { method: 'POST' }),
+
   /** Draw a link by hand. Stamped as analyst-asserted, and scores nothing. */
   createLink: (investigationId: string, input: ManualLinkInput) =>
     request<Relationship>(`/investigations/${investigationId}/links`, {

@@ -25,9 +25,26 @@ export interface EntityNodeData extends Record<string, unknown> {
  */
 export default function EntityNode({ data, selected }: NodeProps) {
   const { node, dimmed, highlighted } = data as EntityNodeData
-  const accent = node.confidence_level
-    ? CONFIDENCE_COLOR[node.confidence_level]
-    : 'var(--color-line-bright)'
+  /*
+   * An entity the analyst has ruled to be somebody else.
+   *
+   * It is drawn set aside rather than removed, and the treatment says which
+   * of the two it is. The confidence colour goes - a band describes how
+   * strongly the *engine* associated this entity, and once a person has said
+   * it is not the same party that number is answering a question nobody is
+   * asking any more. What replaces it is the analyst's own mark: a muted
+   * card, a struck-through handle, and the verdict spelled out where the
+   * score used to be.
+   *
+   * Deliberately still legible. Fading it to near-nothing would make the
+   * ruling feel like a delete, and the whole point is that it is not one.
+   */
+  const ruledOut = node.analyst_verdict === 'DIFFERENT_IDENTITY'
+  const accent = ruledOut
+    ? 'var(--color-rejected)'
+    : node.confidence_level
+      ? CONFIDENCE_COLOR[node.confidence_level]
+      : 'var(--color-line-bright)'
 
   return (
     <div
@@ -35,16 +52,23 @@ export default function EntityNode({ data, selected }: NodeProps) {
       style={{
         minWidth: 168,
         maxWidth: 208,
-        opacity: dimmed ? 0.25 : 1,
+        opacity: dimmed ? 0.25 : ruledOut ? 0.62 : 1,
         borderColor:
           selected || highlighted ? 'var(--color-accent)' : accent,
-        borderStyle: node.resolved ? 'solid' : 'dashed',
+        borderStyle: node.resolved && !ruledOut ? 'solid' : 'dashed',
         borderWidth: node.is_seed || selected || highlighted ? 2 : 1,
         boxShadow:
           selected || highlighted
             ? '0 0 0 3px rgba(34, 211, 238, 0.18)'
             : '0 6px 18px rgba(0, 0, 0, 0.45)',
       }}
+      title={
+        ruledOut
+          ? node.analyst_note
+            ? `You ruled this a different party: ${node.analyst_note}`
+            : 'You ruled this a different party.'
+          : undefined
+      }
     >
       {/*
         The connection points are how a link gets drawn, so they are visible
@@ -101,7 +125,9 @@ export default function EntityNode({ data, selected }: NodeProps) {
         )}
         <div className="min-w-0">
           <div
-            className="truncate font-mono text-[13px] text-ink"
+            className={`truncate font-mono text-[13px] ${
+              ruledOut ? 'text-dim line-through decoration-1' : 'text-ink'
+            }`}
             title={node.identifier}
           >
             {node.label}
@@ -115,7 +141,15 @@ export default function EntityNode({ data, selected }: NodeProps) {
       </div>
 
       <div className="mt-1.5 flex items-center justify-between gap-2">
-        {node.confidence_level ? (
+        {ruledOut ? (
+          <span
+            className="font-mono text-[10px] tracking-wide"
+            style={{ color: 'var(--color-rejected)' }}
+            title={node.analyst_note ?? undefined}
+          >
+            DIFFERENT IDENTITY
+          </span>
+        ) : node.confidence_level ? (
           <span
             className="font-mono text-[10px] tracking-wide"
             style={{ color: accent }}

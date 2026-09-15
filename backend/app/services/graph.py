@@ -90,6 +90,8 @@ class GraphService:
                 depth=entity.depth,
                 discovery_method=entity.discovery_method,
                 degree=graph.degree(entity.id) if graph.has_node(entity.id) else 0,
+                analyst_verdict=entity.analyst_verdict,
+                analyst_note=entity.analyst_note,
                 confidence_level=best.get(entity.id, (None, None))[0],
                 confidence_score=best.get(entity.id, (None, None))[1],
                 position=GraphPosition(**positions[entity.id]),

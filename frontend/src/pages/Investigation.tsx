@@ -27,6 +27,7 @@ const DEFAULT_FILTERS: FilterState = {
   entityTypes: new Set(ENTITY_TYPES),
   confidenceLevels: new Set<ConfidenceLevel>([...CONFIDENCE_ORDER, 'INSUFFICIENT']),
   showUnassociated: true,
+  showDifferentIdentity: true,
 }
 
 const RUNNING = ['CREATED', 'CRAWLING', 'ANALYZING']
@@ -227,6 +228,9 @@ export default function Investigation({ view }: Props) {
             setFocusNodeId((current) => (current === entityId ? null : entityId))
           }
           onSelectRelationship={selectEdge}
+          // A ruling changes how the canvas draws the entity, and whether it
+          // draws it at all, so the graph has to be re-read for it to show.
+          onEntityChanged={load}
         />
       )
     }

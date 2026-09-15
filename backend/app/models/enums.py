@@ -99,6 +99,25 @@ class AnalystStatus(StrEnum):
     REJECTED = "REJECTED"
 
 
+class EntityVerdict(StrEnum):
+    """An analyst's judgement about whether an entity belongs here at all.
+
+    Distinct from :class:`AnalystStatus`, which rules on a *relationship* -
+    whether the evidence between two entities supports an association. This
+    rules on the entity itself: a namesake, a coincidence of handle, an
+    account the analyst has established belongs to somebody else.
+
+    ``DIFFERENT_IDENTITY`` is an analyst's assertion, and the only kind of
+    identity claim this system records. The engine never sets it. Nothing is
+    deleted when it is set either: the observations stand, the evidence stays
+    readable, and the verdict is reversible - what changes is that the
+    analyst has said, on the record, that this one is not the person.
+    """
+
+    UNREVIEWED = "UNREVIEWED"
+    DIFFERENT_IDENTITY = "DIFFERENT_IDENTITY"
+
+
 class EvidenceType(StrEnum):
     """Why a relationship scored what it scored."""
 
