@@ -49,11 +49,23 @@ CONSTRAINTS: tuple[str, ...] = (
     "FOR (n:Snapshot) REQUIRE n.id IS UNIQUE",
     "CREATE CONSTRAINT crawl_event_id IF NOT EXISTS "
     "FOR (n:CrawlEvent) REQUIRE n.id IS UNIQUE",
-    # One entity per (investigation, type, platform, identifier): the
+    # One entity per (investigation, type, platform, folded identifier): the
     # de-duplication rule the crawler relies on, enforced by the database.
-    "CREATE CONSTRAINT entity_identity IF NOT EXISTS "
-    "FOR (n:Entity) REQUIRE (n.investigation_id, n.type, n.platform, n.identifier) "
+    #
+    # Folded, because handles are case-insensitive: keying on the observed
+    # spelling let one account be recorded twice under two capitalisations.
+    "CREATE CONSTRAINT entity_identity_folded IF NOT EXISTS "
+    "FOR (n:Entity) "
+    "REQUIRE (n.investigation_id, n.type, n.platform, n.normalized_identifier) "
     "IS UNIQUE",
+)
+
+#: Schema this version has replaced.  ``IF NOT EXISTS`` cannot update an
+#: existing constraint, so the superseded one is dropped by name - otherwise a
+#: database created before the fix keeps enforcing the rule that allowed the
+#: duplicates, and the new MERGE has to fight it.
+RETIRED_CONSTRAINTS: tuple[str, ...] = (
+    "DROP CONSTRAINT entity_identity IF EXISTS",
 )
 
 INDEXES: tuple[str, ...] = (
@@ -141,6 +153,22 @@ def init_db() -> None:
 
     driver = get_driver()
     with driver.session(database=settings.neo4j_database) as session:
+        # Order matters: retire the superseded rule, heal the data it let
+        # through, and only then enforce the new one - a constraint cannot be
+        # created while existing rows violate it.
+        for statement in RETIRED_CONSTRAINTS:
+            session.run(statement)
+
+        from .repository import Neo4jRepository
+
+        merged = Neo4jRepository(session).merge_duplicate_entities()
+        if merged:
+            logger.info(
+                "duplicate_entities_merged count=%d "
+                "(same account recorded under more than one capitalisation)",
+                merged,
+            )
+
         for statement in CONSTRAINTS + INDEXES:
             session.run(statement)
     logger.info(

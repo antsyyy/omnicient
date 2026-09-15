@@ -505,3 +505,24 @@ def is_identifying_host(value: str | None) -> bool:
     return not any(
         domain.endswith(f".{host}") for host in NON_IDENTIFYING_HOSTS
     )
+
+
+def identity_key(identifier: str | None) -> str:
+    """The form two observations of the same thing must agree on.
+
+    Handles are case-insensitive on every platform in the catalogue:
+    ``PrashantRanjitkar`` and ``prashantranjitkar`` are one Instagram account,
+    not two.  Keying entities on the raw identifier recorded them separately,
+    which split one account into two nodes, doubled its relationships and made
+    the same person look like a pair of matching strangers.
+
+    Domains are case-insensitive by definition, and website identities are
+    already lowercased upstream by ``website_identity``, so folding is correct
+    for every identifier that currently reaches an entity.  Email local parts
+    are case-sensitive in the RFC and insensitive in practice at every real
+    provider; folding matches what an investigator means.
+
+    If a source is ever added whose identifiers genuinely are case-sensitive,
+    this is the single place that has to learn about it.
+    """
+    return (identifier or "").strip().casefold()

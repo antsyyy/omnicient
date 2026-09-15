@@ -41,6 +41,7 @@ from .models.investigation import CrawlEvent, Investigation
 from .models.relationship import Relationship
 from .models.snapshot import Snapshot
 from .utils.logging import get_logger
+from .utils.normalization import identity_key
 
 logger = get_logger(__name__)
 
@@ -204,7 +205,18 @@ class Neo4jRepository:
     # -- entities ----------------------------------------------------------
 
     def upsert_entity(self, entity: Entity) -> Entity:
-        """Create or refresh an entity, keyed by type + platform + identifier.
+        """Create or refresh an entity, keyed by type + platform + identity.
+
+        The key is the case-folded identifier, not the observed one.  Handles
+        are case-insensitive on every platform here, so keying on the raw text
+        recorded ``PrashantRanjitkar`` and ``prashantranjitkar`` as two
+        separate accounts - one person appearing twice on the canvas, with the
+        relationships between them counted twice over.
+
+        The observed spelling is still kept and shown.  The first one seen
+        wins until the platform itself is read, at which point its own
+        canonical form takes over - a candidate guessed from another site
+        should not outrank how the site in question actually writes it.
 
         ``first_seen`` is preserved across re-observations while ``last_seen``
         moves, which is what makes the snapshot history meaningful.
@@ -216,15 +228,25 @@ class Neo4jRepository:
                 investigation_id: $investigation_id,
                 type: $type,
                 platform: $platform,
-                identifier: $identifier
+                normalized_identifier: $identity_key
             }})
             ON CREATE SET e.id = $id,
                           e.first_seen = datetime($now),
                           e.created_at = datetime($now),
-                          e.is_seed = $is_seed
+                          e.is_seed = $is_seed,
+                          e.identifier = $identifier,
+                          e.name = $name
             SET e:{label},
-                e.name = $name,
-                e.normalized_identifier = toLower($identifier),
+                // Keep the spelling already on record unless this observation
+                // came from the platform itself, which is authoritative about
+                // how it writes its own handles. The displayed name moves with
+                // the identifier: they are the same handle, and a node whose
+                // label disagreed with its own identifier would read as two
+                // different accounts again.
+                e.identifier = CASE WHEN $resolved THEN $identifier
+                                    ELSE coalesce(e.identifier, $identifier) END,
+                e.name = CASE WHEN $resolved THEN $name
+                              ELSE coalesce(e.name, $name) END,
                 e.url = coalesce($url, e.url),
                 e.display_name = $display_name,
                 e.bio = $bio,
@@ -252,6 +274,7 @@ class Neo4jRepository:
             type=str(entity.type),
             platform=entity.platform,
             identifier=entity.identifier,
+            identity_key=identity_key(entity.identifier),
             name=entity.name,
             url=entity.url,
             display_name=entity.display_name,
@@ -271,6 +294,122 @@ class Neo4jRepository:
             now=datetime.now(UTC).isoformat(),
         ).single()
         return Entity.from_node(record["e"])
+
+    def merge_duplicate_entities(self) -> int:
+        """Fold entities that differ only by capitalisation into one node.
+
+        Databases written before identity was case-folded hold the same
+        account twice - ``PrashantRanjitkar`` and ``prashantranjitkar`` as
+        separate nodes, each with its own relationships and evidence. The new
+        uniqueness constraint cannot be created while they are there, so this
+        runs first and heals them.
+
+        Nothing is discarded. Every relationship, evidence item and snapshot
+        belonging to a duplicate is moved onto the survivor before the
+        duplicate is removed; relationships that then collide collapse into
+        one by MERGE, which is the correct outcome - they described the same
+        association all along.
+
+        The survivor is whichever node was actually read from the platform,
+        preferring the earliest, so the spelling that is kept is the one the
+        platform published.
+        """
+        groups = self.session.run(
+            """
+            MATCH (e:Entity)
+            WITH e.investigation_id AS investigation, e.type AS type,
+                 e.platform AS platform,
+                 toLower(trim(e.identifier)) AS key,
+                 collect(e) AS nodes
+            WHERE size(nodes) > 1
+            RETURN investigation, type, platform, key, nodes
+            """
+        ).data()
+
+        merged = 0
+        for group in groups:
+            nodes = group["nodes"]
+            # Read-from-the-platform first, then oldest: the spelling kept is
+            # the one the platform itself published.
+            ordered = sorted(
+                nodes,
+                key=lambda n: (
+                    not n.get("resolved", False),
+                    str(n.get("first_seen") or ""),
+                    n["id"],
+                ),
+            )
+            survivor = ordered[0]["id"]
+            for duplicate in ordered[1:]:
+                self._absorb_entity(duplicate["id"], survivor)
+                merged += 1
+
+        if merged:
+            logger.info("entities_merged count=%d", merged)
+        return merged
+
+    def _absorb_entity(self, duplicate_id: str, survivor_id: str) -> None:
+        """Move everything attached to one entity onto another, then remove it."""
+        for rel_type in RelationshipType:
+            name = _relationship_type(rel_type)
+            # Outgoing, then incoming. Edges between the two duplicates would
+            # become self-loops and are simply dropped.
+            self.session.run(
+                f"""
+                MATCH (d:Entity {{id: $duplicate}})-[r:{name}]->(other:Entity)
+                MATCH (s:Entity {{id: $survivor}})
+                WITH r, s, other WHERE other.id <> $survivor
+                MERGE (s)-[n:{name} {{investigation_id: r.investigation_id}}]->(other)
+                ON CREATE SET n = properties(r), n.source_entity_id = $survivor
+                DELETE r
+                """,
+                duplicate=duplicate_id,
+                survivor=survivor_id,
+            )
+            self.session.run(
+                f"""
+                MATCH (other:Entity)-[r:{name}]->(d:Entity {{id: $duplicate}})
+                MATCH (s:Entity {{id: $survivor}})
+                WITH r, s, other WHERE other.id <> $survivor
+                MERGE (other)-[n:{name} {{investigation_id: r.investigation_id}}]->(s)
+                ON CREATE SET n = properties(r), n.target_entity_id = $survivor
+                DELETE r
+                """,
+                duplicate=duplicate_id,
+                survivor=survivor_id,
+            )
+
+        # Evidence and snapshots refer to entities by id rather than by edge.
+        self.session.run(
+            """
+            MATCH (v:Evidence) WHERE v.source_entity_id = $duplicate
+            SET v.source_entity_id = $survivor
+            """,
+            duplicate=duplicate_id,
+            survivor=survivor_id,
+        )
+        self.session.run(
+            """
+            MATCH (v:Evidence) WHERE v.target_entity_id = $duplicate
+            SET v.target_entity_id = $survivor
+            """,
+            duplicate=duplicate_id,
+            survivor=survivor_id,
+        )
+        self.session.run(
+            """
+            MATCH (d:Entity {id: $duplicate})-[:HAS_SNAPSHOT]->(snap:Snapshot)
+            MATCH (s:Entity {id: $survivor})
+            SET snap.entity_id = $survivor
+            MERGE (s)-[:HAS_SNAPSHOT]->(snap)
+            """,
+            duplicate=duplicate_id,
+            survivor=survivor_id,
+        )
+        self.session.run(
+            "MATCH (d:Entity {id: $duplicate}) DETACH DELETE d",
+            duplicate=duplicate_id,
+        )
 
     def get_entity(self, entity_id: str) -> Entity | None:
         record = self.session.run(
