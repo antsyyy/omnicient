@@ -706,6 +706,8 @@ class OpenGraphProfileAdapter(SourceAdapter):
                 display_name=display_name,
                 bio=bio,
                 avatar_url=avatar,
+                location=self.extract_location(meta, html),
+                organization=self.extract_organization(meta, html),
                 external_links=links,
                 source=self.platform,
                 metadata=metadata,
@@ -735,6 +737,19 @@ class OpenGraphProfileAdapter(SourceAdapter):
         from ..utils.url_parser import extract_urls
 
         return extract_urls(bio)
+
+    def extract_location(self, meta: dict[str, str], html: str) -> str | None:
+        """The place the profile publishes for itself, where it publishes one.
+
+        Worth its own hook because the correlation engine treats conflicting
+        locations as evidence *against* an association, so a source that can
+        read one is contributing to both sides of the score.
+        """
+        return None
+
+    def extract_organization(self, meta: dict[str, str], html: str) -> str | None:
+        """The employer or institution the profile names."""
+        return None
 
     def extract_metadata(self, meta: dict[str, str], html: str) -> dict[str, Any]:
         """Extra observed fields to record, e.g. audience counts.
