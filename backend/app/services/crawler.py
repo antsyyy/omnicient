@@ -23,12 +23,14 @@ from ..models.enums import DiscoveryMethod, EntityType, EvidenceType, Relationsh
 from ..sources import SourceRegistry
 from ..sources.base import FailureReason, LookupResult, ObservedProfile
 from ..utils.logging import get_logger, log_event
+from ..utils.normalization import identity_key
 from .discovery import (
     Candidate,
     EntityKey,
     candidates_from_profile,
     discover_sources,
     email_domain_candidate,
+    fanout_candidates,
     seed_candidate,
     similarity_candidates,
 )
@@ -147,6 +149,10 @@ class Crawler:
 
         queue: deque[Candidate] = deque()
         queued: set[EntityKey] = {seed.key}
+        # Handles already asked of every source, so a second sighting of one
+        # does not re-run the whole catalogue.
+        fanned_out: set[str] = {identity_key(seed.identifier)}
+        fanout_budget = max(0, self.settings.max_fanout_handles)
 
         if seed.platform == "username":
             # No platform was specified, so the seed is the handle itself and
@@ -245,6 +251,45 @@ class Crawler:
                             platforms=self._similarity_platforms(),
                             known=set(queued),
                         )
+                    )
+
+                # A profile that links to an account under a *different*
+                # handle has handed the investigation a new identity to
+                # search. Following it only on the platform that named it
+                # would waste the strongest lead there is - the person
+                # published the connection themselves.
+                for reference in profile.references:
+                    if fanout_budget <= 0:
+                        break
+                    handle = identity_key(reference.identifier)
+                    if not handle or handle in fanned_out:
+                        continue
+                    if not reference.explicit:
+                        # Only self-published links. Fanning out on a guess
+                        # would multiply guesses.
+                        continue
+                    fanned_out.add(handle)
+                    fanout_budget -= 1
+                    derived.extend(
+                        fanout_candidates(
+                            reference.identifier,
+                            platforms=self.registry.platforms(),
+                            depth=candidate.depth + 1,
+                            discovered_on=candidate.label,
+                            source_platform=reference.platform,
+                        )
+                    )
+                    self._record(
+                        outcome,
+                        "handle_discovered",
+                        (
+                            f"{candidate.label} links to '{reference.identifier}' "
+                            f"on {reference.platform}, a different handle - "
+                            f"searching every source for it"
+                        ),
+                        platform=reference.platform,
+                        identifier=reference.identifier,
+                        discovered_on=candidate.platform,
                     )
 
                 for next_candidate in derived:

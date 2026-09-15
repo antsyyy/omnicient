@@ -180,6 +180,21 @@ class Settings:
     #: so the old budget truncated every such crawl - and which lookups
     #: survived depended on queue order rather than on relevance.
     max_pages: int = field(default_factory=lambda: _env_int("OMNICIENT_MAX_PAGES", 150))
+    #: How many *newly discovered* handles may themselves be searched across
+    #: the whole catalogue.
+    #:
+    #: When a profile publishes a link to an account under a different handle
+    #: - a Facebook Intro naming a LinkedIn that reads /in/prabhatach when the
+    #: seed was prabhatacharya19 - that handle is the strongest lead an
+    #: investigation gets, because the person published the connection
+    #: themselves. Searching it everywhere is the point of following it.
+    #:
+    #: Bounded because each one costs a full fan-out, and a chain of them
+    #: would multiply. Three keeps a crawl inside its page budget while still
+    #: following the leads that matter.
+    max_fanout_handles: int = field(
+        default_factory=lambda: _env_int("OMNICIENT_MAX_FANOUT_HANDLES", 3)
+    )
     request_timeout: float = field(
         default_factory=lambda: _env_float("OMNICIENT_REQUEST_TIMEOUT", 10.0)
     )
