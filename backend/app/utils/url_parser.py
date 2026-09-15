@@ -40,6 +40,8 @@ PROFILE_PATH_PREFIXES: dict[str, tuple[str, ...]] = {
     "devto": (),
     "chess": ("member",),
     "lobsters": ("u",),
+    # lichess.org/@/thibault - the sigil is its own path segment here.
+    "lichess": ("@",),
 }
 
 #: Platforms whose profile URLs *always* carry the prefix above.  Without this,
@@ -219,13 +221,16 @@ def parse_profile_url(url: str | None) -> tuple[str, str] | None:
         return None
 
     prefixes = PROFILE_PATH_PREFIXES.get(platform, ())
-    # Sigils platforms put in front of a handle: "@alice", "~alice".
+    # Sigils platforms put in front of a handle: "@alice", "~alice". The raw
+    # segment is kept too, because a site may make the sigil a segment of its
+    # own: lichess.org/@/thibault.
+    raw_first = segments[0].lower()
     first = segments[0].lstrip("@~").lower()
     sigil = PROFILE_PATH_SIGILS.get(platform)
     if sigil and segments[0].startswith(sigil):
         # The sigil marks the handle directly: lobste.rs/~jcs.
         raw = segments[0]
-    elif first in prefixes:
+    elif first in prefixes or raw_first in prefixes:
         param = PROFILE_QUERY_PARAM.get(platform)
         if param:
             # ``news.ycombinator.com/user?id=alice``

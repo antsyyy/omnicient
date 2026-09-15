@@ -26,6 +26,7 @@ from .base import (
 )
 from .bluesky import BlueskyAdapter
 from .dev import (
+    CodebergAdapter,
     CratesIoAdapter,
     DockerHubAdapter,
     HackerNewsAdapter,
@@ -36,14 +37,15 @@ from .dev import (
 )
 from .devto import DevToAdapter
 from .facebook import FacebookAdapter
-from .gaming import ChessComAdapter, SteamAdapter
+from .gaming import ChessComAdapter, LichessAdapter, SteamAdapter
 from .github import GitHubAdapter
 from .gravatar import GravatarAdapter
+from .identity_sites import AboutMeAdapter, MicroBlogAdapter
 from .instagram import InstagramAdapter
 from .keybase import KeybaseAdapter
 from .learning import CodewarsAdapter, DuolingoAdapter, ScratchAdapter
 from .mastodon import MastodonAdapter
-from .music import LastFmAdapter, SoundCloudAdapter
+from .music import LastFmAdapter, MixcloudAdapter, SoundCloudAdapter
 from .reddit import RedditAdapter
 from .social import MediumAdapter, TelegramAdapter
 from .threads import ThreadsAdapter
@@ -58,6 +60,7 @@ ADAPTER_CLASSES: tuple[type[SourceAdapter], ...] = (
     # Identity and general web.
     KeybaseAdapter,
     GravatarAdapter,
+    AboutMeAdapter,
     WebsiteAdapter,
     # Link-in-bio pages. The single most productive source an identity
     # investigation has: a page whose whole purpose is to list its owner's
@@ -75,17 +78,21 @@ ADAPTER_CLASSES: tuple[type[SourceAdapter], ...] = (
     DockerHubAdapter,
     LaunchpadAdapter,
     LobstersAdapter,
+    CodebergAdapter,
     # Social.
     MastodonAdapter,
     BlueskyAdapter,
     TelegramAdapter,
     MediumAdapter,
+    MicroBlogAdapter,
     # Gaming.
     SteamAdapter,
     ChessComAdapter,
+    LichessAdapter,
     # Music.
     SoundCloudAdapter,
     LastFmAdapter,
+    MixcloudAdapter,
     # Learning.
     CodewarsAdapter,
     ScratchAdapter,

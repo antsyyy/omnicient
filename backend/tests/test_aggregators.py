@@ -286,3 +286,200 @@ def test_a_link_to_one_of_these_sites_is_recognised(url, expected) -> None:
     from app.utils.url_parser import parse_profile_url
 
     assert parse_profile_url(url) == expected
+
+
+# ---------------------------------------------------------------------------
+# The identity-forward sources
+# ---------------------------------------------------------------------------
+
+
+def test_codeberg_publishes_a_public_email() -> None:
+    """The most useful field a developer platform can hand an investigation."""
+    from app.sources.dev import CodebergAdapter
+
+    payload = {
+        "login": "gusted",
+        "full_name": "Gusted",
+        "email": "gusted@example.org",
+        "avatar_url": "https://codeberg.org/avatars/abc",
+        "location": "Berlin",
+        "website": "https://gusted.xyz",
+        "description": "Maintainer.",
+        "html_url": "https://codeberg.org/gusted",
+    }
+    profile = CodebergAdapter().parse_json("gusted", payload, "x")
+
+    assert profile.display_name == "Gusted"
+    assert profile.email == "gusted@example.org"
+    assert profile.location == "Berlin"
+    assert profile.avatar_url == "https://codeberg.org/avatars/abc"
+    assert "https://gusted.xyz" in profile.external_links
+
+
+def test_codeberg_drops_the_privacy_placeholder_address() -> None:
+    """Gitea substitutes a noreply address when the real one is private.
+
+    Recording it as a contact address would put a made-up address on the
+    profile and invite an analyst to correlate on it.
+    """
+    from app.sources.dev import CodebergAdapter
+
+    payload = {"login": "gusted", "email": "gusted@noreply.codeberg.org"}
+    profile = CodebergAdapter().parse_json("gusted", payload, "x")
+
+    assert profile.email is None
+
+
+def test_lichess_reads_the_accounts_a_player_declared() -> None:
+    """Lichess invites players to list their other accounts and publishes them."""
+    from app.sources.gaming import LichessAdapter
+
+    payload = {
+        "username": "thibault",
+        "url": "https://lichess.org/@/thibault",
+        "title": "NM",
+        "profile": {
+            "realName": "Thibault Duplessis",
+            "bio": "I turn coffee into bugs.",
+            "country": "FR",
+            "links": "github.com/ornicar\r\nmas.to/@thibault",
+        },
+    }
+    profile = LichessAdapter().parse_json("thibault", payload, "x")
+
+    assert profile.display_name == "Thibault Duplessis"
+    assert profile.location == "FR"
+    assert ("github", "ornicar") in {
+        (r.platform, r.identifier) for r in profile.references
+    }
+    assert profile.metadata["title"] == "NM"
+
+
+def test_a_closed_lichess_account_is_not_a_profile() -> None:
+    """Lichess publishes a tombstone rather than answering 404."""
+    from app.sources.gaming import LichessAdapter
+
+    assert (
+        LichessAdapter().parse_json(
+            "gone", {"username": "gone", "disabled": True}, "x"
+        )
+        is None
+    )
+
+
+def test_mixcloud_reads_a_location_and_the_largest_avatar() -> None:
+    from app.sources.music import MixcloudAdapter
+
+    payload = {
+        "username": "spartacus",
+        "name": "Spartacus",
+        "biog": "Part of the team.",
+        "city": "London",
+        "country": "United Kingdom",
+        "url": "https://www.mixcloud.com/spartacus/",
+        "pictures": {
+            "small": "https://img/25x25",
+            "large": "https://img/300x300",
+            "extra_large": "https://img/600x600",
+        },
+    }
+    profile = MixcloudAdapter().parse_json("spartacus", payload, "x")
+
+    assert profile.location == "London, United Kingdom"
+    # The small ones are unreadable thumbnails.
+    assert profile.avatar_url == "https://img/600x600"
+
+
+def test_about_me_reads_the_name_and_place_from_the_page_title() -> None:
+    from app.sources.identity_sites import AboutMeAdapter
+
+    html = (
+        "<html><head><title>Tim Roberts - San Francisco | about.me</title>"
+        '<meta property="og:title" content="Tim Roberts on about.me">'
+        '<meta property="og:description" content="I live in San Francisco.">'
+        "</head></html>"
+    )
+    adapter = AboutMeAdapter()
+    profile = adapter.parse_profile("tim", html, "https://about.me/tim")
+
+    assert profile.display_name == "Tim Roberts"
+    assert adapter.extract_location({}, html) == "San Francisco"
+
+
+def test_micro_blog_is_read_from_its_document_title() -> None:
+    """It publishes an og:image and no og:title, so the shared parser gave up."""
+    from app.sources.identity_sites import MicroBlogAdapter
+
+    html = (
+        "<html><head><title>Micro.blog - @manton</title>"
+        '<meta property="og:image" content="https://avatars.micro.blog/a.jpg">'
+        "</head><body>Verified URL</body></html>"
+    )
+    profile = MicroBlogAdapter().parse_profile(
+        "manton", html, "https://micro.blog/manton"
+    )
+
+    assert profile is not None
+    assert profile.display_name == "manton"
+    assert profile.avatar_url == "https://avatars.micro.blog/a.jpg"
+    assert profile.metadata.get("verified_url") is True
+
+
+# ---------------------------------------------------------------------------
+# The catalogue itself
+# ---------------------------------------------------------------------------
+
+
+def test_no_platform_is_registered_twice() -> None:
+    """A duplicate registration lookups the same site twice on every crawl.
+
+    It happened, and the only reason anybody noticed was the self-check
+    printing Codeberg twice.
+    """
+    import collections
+
+    from app.sources import ADAPTER_CLASSES
+
+    counts = collections.Counter(adapter.platform for adapter in ADAPTER_CLASSES)
+    assert [name for name, count in counts.items() if count > 1] == []
+
+
+def test_the_crawler_can_reach_every_registered_platform() -> None:
+    """A source with no host mapping is never recognised in a published link."""
+    from app.sources import ADAPTER_CLASSES
+    from app.utils.normalization import PLATFORM_HOSTS
+
+    missing = [
+        adapter.platform
+        for adapter in ADAPTER_CLASSES
+        if adapter.platform not in PLATFORM_HOSTS
+        # The website adapter is handed URLs directly, not a handle.
+        and adapter.platform != "website"
+    ]
+    assert missing == []
+
+
+def test_our_own_crawler_is_never_recorded_as_an_account() -> None:
+    """about.me echoes the request headers into the page it serves.
+
+    The user agent carries a project URL, so extracting links naively put the
+    same GitHub account on every about.me profile ever read.
+    """
+    from app.sources.base import ObservedProfile, enrich_profile
+
+    profile = enrich_profile(
+        ObservedProfile(
+            platform="aboutme",
+            identifier="tim",
+            name="@tim",
+            url="https://about.me/tim",
+            external_links=[
+                "https://github.com/omnicient",
+                "https://github.com/timroberts",
+            ],
+        )
+    )
+
+    found = {(r.platform, r.identifier) for r in profile.references}
+    assert ("github", "timroberts") in found
+    assert ("github", "omnicient") not in found

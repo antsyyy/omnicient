@@ -14,7 +14,13 @@ from __future__ import annotations
 import re
 from typing import Any
 
-from .base import OpenGraphProfileAdapter, SourceCategory
+from .base import (
+    JsonProfileAdapter,
+    ObservedProfile,
+    OpenGraphProfileAdapter,
+    SourceCategory,
+    enrich_profile,
+)
 
 #: Apostrophe forms seen in the wild. Last.fm renders a typographic right
 #: single quote, so a pattern matching only the ASCII form misses every
@@ -96,3 +102,57 @@ class LastFmAdapter(OpenGraphProfileAdapter):
             meta.get("og:description") or meta.get("description") or ""
         )
         return {"tracks_played": match.group(1)} if match else {}
+
+
+class MixcloudAdapter(JsonProfileAdapter):
+    """Mixcloud, via its public user API.
+
+    The city and country fields are the interesting part: a location is
+    evidence the correlation engine can contradict as well as corroborate,
+    and few music platforms publish one at all.
+    """
+
+    platform = "mixcloud"
+    name = "Mixcloud"
+    category = SourceCategory.MUSIC
+    api_template = "https://api.mixcloud.com/{identifier}/"
+    url_template = "https://www.mixcloud.com/{identifier}/"
+    probe_present = "spartacus"
+
+    def parse_json(
+        self, identifier: str, payload: Any, url: str
+    ) -> ObservedProfile | None:
+        if not isinstance(payload, dict) or not payload.get("username"):
+            return None
+        handle = str(payload["username"])
+
+        pictures = payload.get("pictures")
+        avatar = None
+        if isinstance(pictures, dict):
+            # Largest square first; the small ones are unreadable thumbnails.
+            for key in ("extra_large", "large", "medium", "thumbnail"):
+                if pictures.get(key):
+                    avatar = pictures[key]
+                    break
+
+        location = ", ".join(
+            part for part in (payload.get("city"), payload.get("country")) if part
+        )
+        return enrich_profile(
+            ObservedProfile(
+                platform=self.platform,
+                identifier=handle,
+                name=f"@{handle}",
+                url=payload.get("url") or url,
+                display_name=(payload.get("name") or "").strip() or None,
+                bio=(payload.get("biog") or "").strip() or None,
+                avatar_url=avatar,
+                location=location or None,
+                source=self.platform,
+                metadata={
+                    key: payload[key]
+                    for key in ("follower_count", "cloudcast_count", "created_time")
+                    if payload.get(key) is not None
+                },
+            )
+        )

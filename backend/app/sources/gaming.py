@@ -9,6 +9,7 @@ is more machinery than a public-data lookup should need.
 
 from __future__ import annotations
 
+import re
 from typing import Any
 
 from bs4 import BeautifulSoup
@@ -128,6 +129,67 @@ class ChessComAdapter(JsonProfileAdapter):
                 metadata={
                     key: payload[key]
                     for key in ("title", "followers", "joined", "status")
+                    if payload.get(key) is not None
+                },
+            )
+        )
+
+
+class LichessAdapter(JsonProfileAdapter):
+    """Lichess, via its documented public user API.
+
+    Worth reading for the ``links`` field: Lichess invites players to list
+    their other accounts and publishes the result, so a single lookup can hand
+    back a GitHub, a Mastodon and a YouTube channel the person declared
+    themselves. It also publishes a real name where one was given.
+    """
+
+    platform = "lichess"
+    name = "Lichess"
+    category = SourceCategory.GAMING
+    api_template = "https://lichess.org/api/user/{identifier}"
+    url_template = "https://lichess.org/@/{identifier}"
+    probe_present = "thibault"
+
+    def parse_json(
+        self, identifier: str, payload: Any, url: str
+    ) -> ObservedProfile | None:
+        if not isinstance(payload, dict) or not payload.get("username"):
+            return None
+        # A closed account is published with a tombstone rather than a 404.
+        if payload.get("disabled") or payload.get("closed"):
+            return None
+
+        handle = str(payload["username"])
+        profile = payload.get("profile")
+        profile = profile if isinstance(profile, dict) else {}
+
+        # One per line, as typed: "github.com/ornicar\r\nmas.to/@ornicar".
+        links = [
+            line.strip()
+            for line in re.split(r"[\r\n]+", str(profile.get("links") or ""))
+            if line.strip()
+        ]
+
+        location = ", ".join(
+            part
+            for part in (profile.get("location"), profile.get("country"))
+            if part
+        )
+        return enrich_profile(
+            ObservedProfile(
+                platform=self.platform,
+                identifier=handle,
+                name=f"@{handle}",
+                url=payload.get("url") or url,
+                display_name=(profile.get("realName") or "").strip() or None,
+                bio=(profile.get("bio") or "").strip() or None,
+                location=location or None,
+                external_links=links,
+                source=self.platform,
+                metadata={
+                    key: payload[key]
+                    for key in ("title", "patron", "verified", "createdAt")
                     if payload.get(key) is not None
                 },
             )

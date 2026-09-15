@@ -349,3 +349,58 @@ class LobstersAdapter(JsonProfileAdapter):
                 },
             )
         )
+
+
+class CodebergAdapter(JsonProfileAdapter):
+    """Codeberg, via the Gitea API every instance of that software exposes.
+
+    The most forthcoming developer source in the catalogue: alongside the
+    usual name and avatar it publishes a location, a personal website, a
+    biography and - unlike almost anything else here - a public email address,
+    which is the single most useful field an identity investigation can
+    collect.
+
+    Gitea substitutes a ``@noreply`` address when a user has asked to keep
+    theirs private. That is not a contact address and recording it as one
+    would put a made-up address on the profile, so it is dropped.
+    """
+
+    platform = "codeberg"
+    name = "Codeberg"
+    category = SourceCategory.DEV
+    api_template = "https://codeberg.org/api/v1/users/{identifier}"
+    url_template = "https://codeberg.org/{identifier}"
+    probe_present = "gusted"
+
+    def parse_json(
+        self, identifier: str, payload: Any, url: str
+    ) -> ObservedProfile | None:
+        if not isinstance(payload, dict) or not payload.get("login"):
+            return None
+        handle = str(payload["login"])
+
+        email = (payload.get("email") or "").strip()
+        if email.endswith("noreply.codeberg.org") or "@" not in email:
+            email = ""
+
+        website = (payload.get("website") or "").strip()
+        return enrich_profile(
+            ObservedProfile(
+                platform=self.platform,
+                identifier=handle,
+                name=f"@{handle}",
+                url=payload.get("html_url") or url,
+                display_name=(payload.get("full_name") or "").strip() or None,
+                bio=(payload.get("description") or "").strip() or None,
+                avatar_url=payload.get("avatar_url") or None,
+                location=(payload.get("location") or "").strip() or None,
+                email=email or None,
+                external_links=[website] if website else [],
+                source=self.platform,
+                metadata={
+                    key: payload[key]
+                    for key in ("created", "followers_count", "is_admin")
+                    if payload.get(key) is not None
+                },
+            )
+        )

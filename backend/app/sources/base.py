@@ -769,6 +769,22 @@ def visible_text(html: str, limit: int = 20000) -> str:
     return " ".join(soup.get_text(" ", strip=True).split())[:limit]
 
 
+def _agent_urls() -> frozenset[str]:
+    """URLs appearing in our own user agent string, normalised for comparison."""
+    from ..utils.url_parser import extract_urls
+
+    return frozenset(
+        (normalize_url(url) or url).rstrip("/")
+        for url in extract_urls(get_settings().user_agent)
+    )
+
+
+def _is_own_agent(link: str | None) -> bool:
+    if not link:
+        return False
+    return (normalize_url(link) or link).rstrip("/") in _agent_urls()
+
+
 def enrich_profile(profile: ObservedProfile) -> ObservedProfile:
     """Fill in the derived fields the crawler pivots on.
 
@@ -786,7 +802,13 @@ def enrich_profile(profile: ObservedProfile) -> ObservedProfile:
     text_sources = " \n".join(
         part for part in (profile.bio, profile.display_name, profile.location) if part
     )
-    links = list(profile.external_links)
+    # Never report our own crawler as somebody's account.
+    #
+    # The user agent carries a project URL, and at least one site - about.me -
+    # echoes the request headers back into the page it serves. Extracted
+    # naively, that put the same GitHub account on every profile read from
+    # there: the observer appearing in its own observations.
+    links = [link for link in profile.external_links if not _is_own_agent(link)]
 
     profile.references = [
         reference

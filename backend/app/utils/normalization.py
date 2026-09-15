@@ -57,6 +57,11 @@ PLATFORM_HOSTS: dict[str, tuple[str, ...]] = {
     # one is still a lead worth putting on the board as an unread reference.
     "twitch": ("twitch.tv", "m.twitch.tv"),
     "tiktok": ("tiktok.com",),
+    "codeberg": ("codeberg.org",),
+    "lichess": ("lichess.org",),
+    "mixcloud": ("mixcloud.com",),
+    "aboutme": ("about.me",),
+    "microblog": ("micro.blog",),
 }
 
 # Alternative spellings analysts (and profile pages) actually use.
@@ -127,6 +132,11 @@ PLATFORM_LABELS: dict[str, str] = {
     "lobsters": "Lobsters",
     "twitch": "Twitch",
     "tiktok": "TikTok",
+    "codeberg": "Codeberg",
+    "lichess": "Lichess",
+    "mixcloud": "Mixcloud",
+    "aboutme": "about.me",
+    "microblog": "Micro.blog",
     "username": "Username",
     "organization": "Organization",
     "website": "Website",
