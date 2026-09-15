@@ -502,6 +502,13 @@ analyst to confirm that a page contains a link the crawler read from it.
 `hide candidates` collapses the view back to what a person stands behind, which
 is the right picture to export or present from.
 
+The key on the canvas is split the same way — colour under *Confidence*,
+stroke under *Standing* — and it draws its samples as real SVG lines carrying
+the same dash constants the canvas uses, so it cannot drift out of step with
+what it describes. It collapses to a single row (the connection count stays
+visible), and the choice is remembered per browser: it is a key, not a
+control, and once an analyst has learned it they want the corner back.
+
 Edges are routed straight because the layout is radial: entities sit on rings
 around the seed, so a line between two of them is a spoke or a chord and reads
 as one. Labels appear on selection, on hover, and on relationships an analyst

@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useMemo, useRef } from 'react'
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import {
   Background,
   BackgroundVariant,
@@ -63,79 +63,163 @@ function isEstablished(edge: GraphPayload['edges'][number]): boolean {
 
 const nodeTypes = { entity: EntityNode }
 
+/*
+ * Dash patterns, shared by the canvas and the legend.
+ *
+ * The legend used to draw its samples with CSS `border-dashed`, which meant
+ * the two dashed meanings - proposed, and contradicted - came out looking
+ * identical in the key while the canvas drew them differently. A legend that
+ * does not match the drawing is worse than none, so both now read from here.
+ */
+/** Where the expanded/collapsed choice is remembered. */
+const LEGEND_KEY = 'omnicient.graph.legend'
+
+const DASH_PROPOSED = '2 5'
+const DASH_CONTRADICTED = '5 4'
+
+/** One sample of an edge, drawn exactly as the canvas draws it. */
+function Stroke({
+  color,
+  dash,
+  width = 1.5,
+}: {
+  color: string
+  dash?: string
+  width?: number
+}) {
+  return (
+    <svg width="18" height="6" viewBox="0 0 18 6" className="shrink-0" aria-hidden="true">
+      <line
+        x1="0"
+        y1="3"
+        x2="18"
+        y2="3"
+        stroke={color}
+        strokeWidth={width}
+        strokeDasharray={dash}
+      />
+    </svg>
+  )
+}
+
+function Key({ children }: { children: React.ReactNode }) {
+  return (
+    <li className="flex items-center gap-1.5 font-mono text-[10px]">{children}</li>
+  )
+}
+
 /**
  * What the drawing means.
  *
- * Colour is confidence and nothing else, so it needs saying once, on the
- * canvas, rather than in documentation the analyst will not have open.
+ * Two channels, and the key is split the way they are. Colour is the
+ * confidence band. Stroke is standing - who puts their name to the line -
+ * which is where contradicted, rejected and analyst-asserted belong too:
+ * none of those is a band, and listing them under "Confidence" (as this
+ * did) quietly undoes the one-channel-one-meaning rule the canvas follows.
+ *
+ * Collapsible, because it is a key and not a control: once an analyst has
+ * learned it they want the canvas back. The counts stay visible either way,
+ * since those change as filters move and are worth watching.
  */
 function Legend({
   shown,
   total,
   edges,
   showCandidates,
+  open,
+  onToggle,
 }: {
   shown: number
   total: number
   edges: number
   showCandidates: boolean
+  open: boolean
+  onToggle: () => void
 }) {
-  return (
-    <div className="rounded-md border border-line bg-panel/95 px-2.5 py-2">
-      <div className="panel-title mb-1.5">Confidence</div>
-      <ul className="space-y-1">
-        {CONFIDENCE_ORDER.map((level) => (
-          <li key={level} className="flex items-center gap-1.5 font-mono text-[10px]">
-            <span
-              className="h-[2px] w-4 shrink-0 rounded"
-              style={{ background: CONFIDENCE_COLOR[level] }}
-            />
-            <span className="text-dim">{CONFIDENCE_LABEL[level]}</span>
-          </li>
-        ))}
-        <li className="flex items-center gap-1.5 font-mono text-[10px]">
-          <span
-            className="h-0 w-4 shrink-0 border-t border-dashed"
-            style={{ borderColor: 'var(--color-contradiction)' }}
-          />
-          <span className="text-dim">Contradicted</span>
-        </li>
-        <li className="flex items-center gap-1.5 font-mono text-[10px]">
-          <span
-            className="h-[2px] w-4 shrink-0 rounded"
-            style={{ background: ASSERTED_COLOR }}
-          />
-          <span className="text-dim">Asserted by you</span>
-        </li>
-      </ul>
+  const counts = `${shown} of ${total} entities · ${edges} ${
+    edges === 1 ? 'connection' : 'connections'
+  }`
 
-      {/*
-        The second channel, and the one that carries the claim. Colour above
-        is the band; thickness and dashes here are who stands behind the line.
-      */}
-      <div className="panel-title mb-1.5 mt-2 border-t border-line pt-2">Standing</div>
-      <ul className="space-y-1">
-        <li className="flex items-center gap-1.5 font-mono text-[10px]">
-          <span className="h-[2.5px] w-4 shrink-0 rounded bg-dim" />
-          <span className="text-dim">Confirmed, or read off a page</span>
-        </li>
-        {showCandidates && (
-          <li className="flex items-center gap-1.5 font-mono text-[10px]">
-            <span
-              className="h-0 w-4 shrink-0 border-t border-dashed"
-              style={{ borderColor: 'var(--color-faint)' }}
-            />
-            <span className="text-faint">Proposed, not yet ruled on</span>
-          </li>
+  return (
+    <div
+      // Fixed width open so the rows align; shrink-to-fit closed.
+      className={`rounded-md border border-line bg-panel/95 ${
+        open ? 'w-[228px]' : 'w-auto'
+      }`}
+    >
+      <button
+        type="button"
+        onClick={onToggle}
+        aria-expanded={open}
+        title={open ? 'Hide the key' : 'Show the key'}
+        className="flex w-full items-center gap-1.5 px-2.5 py-1.5 text-left text-dim hover:bg-line/40 hover:text-ink"
+      >
+        {/*
+          An SVG rather than a ▾ character: the interface's monospace stack
+          has no geometric-shape glyphs, so the character fell back to a dot
+          and the control read as a speck of dust.
+        */}
+        <svg
+          width="8"
+          height="8"
+          viewBox="0 0 8 8"
+          aria-hidden="true"
+          className={`shrink-0 transition-transform ${open ? '' : '-rotate-90'}`}
+        >
+          <path d="M1 2.5 L4 6 L7 2.5" fill="none" stroke="currentColor" strokeWidth="1.5" />
+        </svg>
+        <span className="panel-title flex-1">Key</span>
+        {!open && (
+          <span className="font-mono text-[10px] text-faint">{edges}</span>
         )}
-      </ul>
-      <div className="mt-1.5 border-t border-line pt-1.5 font-mono text-[10px] text-faint">
-        A dashed node was referenced but never read.
-      </div>
-      <div className="mt-1 font-mono text-[10px] text-faint">
-        {shown} of {total} entities · {edges}{' '}
-        {edges === 1 ? 'connection' : 'connections'}
-      </div>
+      </button>
+
+      {open && (
+        <div className="px-2.5 pb-2">
+          <div className="panel-title mb-1.5">Confidence</div>
+          <ul className="space-y-1">
+            {CONFIDENCE_ORDER.map((level) => (
+              <Key key={level}>
+                <Stroke color={CONFIDENCE_COLOR[level]} width={2} />
+                <span className="text-dim">{CONFIDENCE_LABEL[level]}</span>
+              </Key>
+            ))}
+          </ul>
+
+          <div className="panel-title mb-1.5 mt-2 border-t border-line pt-2">
+            Standing
+          </div>
+          <ul className="space-y-1">
+            <Key>
+              <Stroke color="var(--color-dim)" width={2.5} />
+              <span className="text-dim">Confirmed, or read off a page</span>
+            </Key>
+            {showCandidates && (
+              <Key>
+                <Stroke color="var(--color-faint)" dash={DASH_PROPOSED} width={1} />
+                <span className="text-faint">Proposed, not yet ruled on</span>
+              </Key>
+            )}
+            <Key>
+              <Stroke
+                color="var(--color-contradiction)"
+                dash={DASH_CONTRADICTED}
+                width={1.5}
+              />
+              <span className="text-dim">Contradicted, or rejected</span>
+            </Key>
+            <Key>
+              <Stroke color={ASSERTED_COLOR} width={2.5} />
+              <span className="text-dim">Asserted by you</span>
+            </Key>
+          </ul>
+
+          <div className="mt-1.5 border-t border-line pt-1.5 font-mono text-[10px] text-faint">
+            A dashed node border means referenced, never read.
+          </div>
+          <div className="mt-1 font-mono text-[10px] text-faint">{counts}</div>
+        </div>
+      )}
     </div>
   )
 }
@@ -190,6 +274,33 @@ export default function InvestigationGraph({
 }: Props) {
   const { fitView } = useReactFlow()
   const dragged = useRef<Record<string, { x: number; y: number }>>({})
+
+  /*
+   * Whether the key is expanded, remembered across visits.
+   *
+   * A per-viewer convenience and nothing more, so localStorage is the right
+   * home for it - but it throws outright in a private window or with site
+   * data blocked, and an exception here would take the whole canvas down
+   * with it. Hence the guards, and an expanded default when it cannot be
+   * read: showing the key to someone who already knows it costs a corner of
+   * the canvas, hiding it from someone who does not costs them the meaning.
+   */
+  const [legendOpen, setLegendOpen] = useState(() => {
+    try {
+      return window.localStorage.getItem(LEGEND_KEY) !== 'closed'
+    } catch {
+      return true
+    }
+  })
+
+  useEffect(() => {
+    try {
+      window.localStorage.setItem(LEGEND_KEY, legendOpen ? 'open' : 'closed')
+    } catch {
+      // A browser that refuses storage still gets a working toggle, just not
+      // a remembered one.
+    }
+  }, [legendOpen])
 
 
   /**
@@ -392,9 +503,9 @@ export default function InvestigationGraph({
                         ? 2.5
                         : 1.5,
               strokeDasharray: candidate
-                ? '2 5'
+                ? DASH_PROPOSED
                 : rejected || contradictory
-                  ? '5 4'
+                  ? DASH_CONTRADICTED
                   : undefined,
               opacity: dimmed ? 0.12 : candidate ? 0.5 : 1,
             },
@@ -498,18 +609,25 @@ export default function InvestigationGraph({
       {derivedEdges.length === 0 && nodes.length > 0 && (
         <Panel position="bottom-center">
           <div className="mb-2 max-w-[420px] rounded-md border border-line bg-panel/95 px-3 py-2 text-center">
-            <div className="panel-title">No connections drawn yet</div>
+            <div className="panel-title">No connections drawn</div>
+            {/*
+              With proposals drawn by default this is a much rarer state than
+              it used to be, and it means something different: not "nothing is
+              confirmed yet" but "nothing was found, or a filter is hiding it
+              all". The copy has to say which.
+            */}
             <p className="mt-1 text-[11px] leading-snug text-dim">
-              This canvas shows the links you stand behind. Confirm an
-              association in the results list and it appears here — or drag one
-              entity onto another to draw the link yourself.
+              {graph.edges.length > 0
+                ? 'Every association is hidden by the current filters.'
+                : 'Nothing linked these entities to each other. You can still drag one entity onto another to draw a link yourself.'}
             </p>
-            <p className="mt-1 text-[11px] leading-snug text-faint">
-              {graph.edges.length > 0 &&
-                `${graph.edges.length} candidate${
-                  graph.edges.length === 1 ? '' : 's'
-                } are waiting to be reviewed.`}
-            </p>
+            {graph.edges.length > 0 && !showCandidates && (
+              <p className="mt-1 text-[11px] leading-snug text-faint">
+                {graph.edges.length} unreviewed{' '}
+                {graph.edges.length === 1 ? 'proposal is' : 'proposals are'}{' '}
+                hidden — use “show candidates” to see them.
+              </p>
+            )}
           </div>
         </Panel>
       )}
@@ -520,6 +638,8 @@ export default function InvestigationGraph({
           total={graph.nodes.length}
           edges={derivedEdges.length}
           showCandidates={showCandidates}
+          open={legendOpen}
+          onToggle={() => setLegendOpen((value) => !value)}
         />
       </Panel>
 
