@@ -66,6 +66,27 @@ class ConfidenceLevel(StrEnum):
     INSUFFICIENT = "INSUFFICIENT"
 
 
+class RelationshipOrigin(StrEnum):
+    """Who first asserted a relationship.
+
+    The distinction has to survive into exports.  A reader of an investigation
+    is entitled to know which connections the engine derived from public
+    observations and which ones a person drew by hand - they carry very
+    different warrant, and a graph that blurs them is making a claim it cannot
+    support.
+
+    An edge keeps the origin of whoever asserted it first.  Evidence still
+    accumulates either way: if a later crawl finds real observations behind a
+    link an analyst drew, the edge gains that evidence and keeps saying that a
+    person put it there.
+    """
+
+    #: Derived by the correlation engine from observed evidence.
+    ENGINE = "ENGINE"
+    #: Drawn by an analyst, with a stated rationale.
+    ANALYST = "ANALYST"
+
+
 class AnalystStatus(StrEnum):
     """Analyst's verdict on a relationship.
 
@@ -97,6 +118,10 @@ class EvidenceType(StrEnum):
     #: Both handles share a substantial root token ("alice" in alice_98 /
     #: alice-security).  Weak on its own; meaningful alongside context.
     SHARED_ROOT_TOKEN = "SHARED_ROOT_TOKEN"
+    #: An analyst drew this link themselves and gave a reason.  It is
+    #: provenance, not an observation: it records who asserted the connection
+    #: and why, and carries no weight, because the engine observed nothing.
+    ANALYST_ASSERTION = "ANALYST_ASSERTION"
 
 
 # Evidence that argues against a relationship rather than for it.

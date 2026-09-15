@@ -723,6 +723,11 @@ class InvestigationService:
         and its evidence collapsed into two columns.  A relationship with no
         evidence would be a claim without a reason, so the supporting and
         contradicting columns are always written even when empty.
+
+        ``origin`` says whether the engine derived the row from observations
+        or an analyst drew it by hand.  Whoever reads this file will not have
+        the interface in front of them to tell the two apart, and they carry
+        very different warrant, so the distinction has to travel with the data.
         """
         import csv
         import io
@@ -746,6 +751,7 @@ class InvestigationService:
                 "target_platform",
                 "target_identifier",
                 "relationship_type",
+                "origin",
                 "score",
                 "confidence",
                 "analyst_status",
@@ -776,6 +782,7 @@ class InvestigationService:
                     target.platform if target else "",
                     target.identifier if target else "",
                     relationship.relationship_type,
+                    relationship.origin,
                     f"{relationship.confidence_score:g}",
                     relationship.confidence_level,
                     relationship.analyst_status,

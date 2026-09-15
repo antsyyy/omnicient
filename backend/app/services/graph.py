@@ -87,6 +87,7 @@ class GraphService:
                 confidence_score=relationship.confidence_score,
                 confidence_level=relationship.confidence_level,
                 analyst_status=relationship.analyst_status,
+                origin=relationship.origin,
                 evidence_count=evidence_counts.get(relationship.id, (0, 0))[0],
                 contradiction_count=evidence_counts.get(relationship.id, (0, 0))[1],
                 summary=relationship.summary,

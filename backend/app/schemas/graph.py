@@ -17,6 +17,7 @@ from ..models.enums import (
     ConfidenceLevel,
     DiscoveryMethod,
     EntityType,
+    RelationshipOrigin,
     RelationshipType,
 )
 
@@ -62,6 +63,9 @@ class GraphEdge(BaseModel):
     confidence_score: float
     confidence_level: ConfidenceLevel
     analyst_status: AnalystStatus
+    #: Whether a person drew this link or the engine derived it. The canvas
+    #: must never draw the two identically.
+    origin: RelationshipOrigin = RelationshipOrigin.ENGINE
     evidence_count: int = 0
     contradiction_count: int = 0
     summary: str | None = None

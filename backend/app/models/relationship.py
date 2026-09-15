@@ -13,7 +13,12 @@ from datetime import datetime
 from typing import Any
 
 from .base import as_datetime, new_id, utcnow
-from .enums import AnalystStatus, ConfidenceLevel, RelationshipType
+from .enums import (
+    AnalystStatus,
+    ConfidenceLevel,
+    RelationshipOrigin,
+    RelationshipType,
+)
 
 
 @dataclass
@@ -33,6 +38,8 @@ class Relationship:
 
     confidence_score: float = 0.0
     confidence_level: str = ConfidenceLevel.LOW
+    #: Who asserted this edge first - the engine, or an analyst by hand.
+    origin: str = RelationshipOrigin.ENGINE
     analyst_status: str = AnalystStatus.UNREVIEWED
     analyst_note: str | None = None
     #: When the analyst last recorded a verdict (section 25).
@@ -52,6 +59,11 @@ class Relationship:
         """Ids of the evidence items backing this relationship."""
         return [item.id for item in self.evidence]
 
+    @property
+    def is_analyst_asserted(self) -> bool:
+        """Whether a person drew this link rather than the engine deriving it."""
+        return str(self.origin) == RelationshipOrigin.ANALYST
+
     @classmethod
     def from_edge(cls, edge: Any) -> "Relationship":
         """Build a record from a Neo4j relationship."""
@@ -64,6 +76,7 @@ class Relationship:
             relationship_type=data.get("relationship_type", edge.type),
             confidence_score=float(data.get("confidence_score", 0.0)),
             confidence_level=data.get("confidence_level", ConfidenceLevel.LOW),
+            origin=data.get("origin", RelationshipOrigin.ENGINE),
             analyst_status=data.get("analyst_status", AnalystStatus.UNREVIEWED),
             analyst_note=data.get("analyst_note"),
             reviewed_at=as_datetime(data.get("reviewed_at")),

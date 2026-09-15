@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from fastapi import APIRouter, Depends, HTTPException
+from fastapi import APIRouter, Depends, HTTPException, Response
 
 from ..database import get_repository
 from ..models.enums import AnalystStatus
@@ -11,6 +11,7 @@ from ..repository import Neo4jRepository
 from ..schemas.entity import EntitySummary
 from ..schemas.evidence import EvidenceRead
 from ..schemas.relationship import AnalystDecision, RelationshipDetail
+from ..services.links import LinkError, LinkService
 from ..utils.logging import get_logger
 
 logger = get_logger(__name__)
@@ -115,3 +116,26 @@ def reset_relationship(
 ) -> RelationshipDetail:
     """Undo a confirm/reject decision."""
     return _decide(repo, relationship_id, AnalystStatus.UNREVIEWED, None)
+
+
+@router.delete(
+    "/{relationship_id}",
+    status_code=204,
+    summary="Remove an analyst-asserted link",
+)
+def delete_relationship(
+    relationship_id: str, repo: Neo4jRepository = Depends(get_repository)
+) -> Response:
+    """Delete a link an analyst drew by hand.
+
+    Only those. An edge the engine derived rests on observations that were
+    genuinely made, and deleting it would leave the investigation unable to
+    explain itself - rejecting it records the same disagreement without
+    destroying the evidence.
+    """
+    relationship = _get_relationship(repo, relationship_id)
+    try:
+        LinkService(repo).delete(relationship)
+    except LinkError as error:
+        raise HTTPException(status_code=409, detail=error.message) from error
+    return Response(status_code=204)

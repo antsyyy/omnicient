@@ -35,7 +35,7 @@ from typing import Any
 from neo4j import Session
 
 from .models.entity import Entity, type_label
-from .models.enums import AnalystStatus, RelationshipType
+from .models.enums import AnalystStatus, RelationshipOrigin, RelationshipType
 from .models.evidence import Evidence
 from .models.investigation import CrawlEvent, Investigation
 from .models.relationship import Relationship
@@ -319,6 +319,7 @@ class Neo4jRepository:
             MERGE (s)-[r:{rel_type} {{investigation_id: $investigation_id}}]->(t)
             ON CREATE SET r.id = $id,
                           r.created_at = datetime($now),
+                          r.origin = $origin,
                           r.analyst_status = $analyst_status,
                           r.analyst_note = NULL,
                           r.reviewed_at = NULL
@@ -341,10 +342,79 @@ class Neo4jRepository:
             score=round(float(relationship.confidence_score), 1),
             level=str(relationship.confidence_level),
             summary=relationship.summary,
+            origin=str(RelationshipOrigin.ENGINE),
             analyst_status=str(AnalystStatus.UNREVIEWED),
             now=datetime.now(UTC).isoformat(),
         ).single()
         return Relationship.from_edge(record["r"])
+
+    def create_manual_relationship(self, relationship: Relationship) -> Relationship:
+        """Record a link an analyst drew by hand.
+
+        Kept apart from :meth:`upsert_relationship` because the two say
+        different things.  That one refreshes a score the engine derived; this
+        one asserts a connection on a person's authority, so it writes the
+        verdict and the note it was created with, and stamps the edge as
+        analyst-asserted for anyone reading the investigation later.
+        """
+        rel_type = _relationship_type(relationship.relationship_type)
+        query = f"""
+            MATCH (s:Entity {{id: $source_id}})
+            MATCH (t:Entity {{id: $target_id}})
+            MERGE (s)-[r:{rel_type} {{investigation_id: $investigation_id}}]->(t)
+            ON CREATE SET r.id = $id,
+                          r.created_at = datetime($now),
+                          r.origin = $origin
+            SET r.relationship_type = $relationship_type,
+                r.source_entity_id = $source_id,
+                r.target_entity_id = $target_id,
+                r.confidence_score = $score,
+                r.confidence_level = $level,
+                r.summary = $summary,
+                r.analyst_status = $analyst_status,
+                r.analyst_note = $analyst_note,
+                r.reviewed_at = datetime($now),
+                r.updated_at = datetime($now)
+            RETURN r
+            """
+        record = self.session.run(
+            query,
+            investigation_id=relationship.investigation_id,
+            id=relationship.id,
+            source_id=relationship.source_entity_id,
+            target_id=relationship.target_entity_id,
+            relationship_type=rel_type,
+            score=round(float(relationship.confidence_score), 1),
+            level=str(relationship.confidence_level),
+            summary=relationship.summary,
+            origin=str(RelationshipOrigin.ANALYST),
+            analyst_status=str(relationship.analyst_status),
+            analyst_note=relationship.analyst_note,
+            now=datetime.now(UTC).isoformat(),
+        ).single()
+        return Relationship.from_edge(record["r"])
+
+    def delete_relationship(self, relationship_id: str) -> bool:
+        """Remove one relationship and the evidence written for it.
+
+        Only ever called for analyst-asserted links.  Deleting an edge the
+        engine derived would destroy observations that were actually made, so
+        the API refuses it; retracting a machine finding is what REJECTED is
+        for.
+        """
+        self.session.run(
+            "MATCH (v:Evidence {relationship_id: $id}) DETACH DELETE v",
+            id=relationship_id,
+        )
+        record = self.session.run(
+            """
+            MATCH ()-[r {id: $id}]->()
+            DELETE r
+            RETURN count(r) AS removed
+            """,
+            id=relationship_id,
+        ).single()
+        return bool(record and record["removed"])
 
     def list_relationships_of_type(
         self, investigation_id: str, relationship_type: str
