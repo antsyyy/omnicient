@@ -21,6 +21,7 @@ from ..services.alias_detection import (
     calculate_username_similarity,
 )
 from ..utils.logging import get_logger
+from ..utils.normalization import identity_key
 
 logger = get_logger(__name__)
 
@@ -32,7 +33,15 @@ class AliasService:
         self.repo = repo
 
     def list_aliases(self, investigation: Investigation) -> AliasList:
-        """Every potential alias for an investigation, strongest first."""
+        """Every potential alias for an investigation, strongest first.
+
+        One row per pair of *handles*, not per pair of accounts.  An alias is
+        a claim about two names - that ``wordpresscom`` and
+        ``wordpressdotcom`` might belong to the same party - and that claim is
+        the same claim however many platforms happen to carry both. Listing it
+        once per platform pairing turned a single finding into twelve
+        near-identical rows and buried everything else.
+        """
         relationships = self.repo.attach_evidence(
             self.repo.list_relationships_of_type(
                 investigation.id, str(RelationshipType.POTENTIAL_ALIAS)
@@ -42,22 +51,45 @@ class AliasService:
             entity.id: entity for entity in self.repo.list_entities(investigation.id)
         }
 
-        aliases = [
-            self._to_read(
-                relationship,
-                entities,
-                # Contradictions sit on the relationship they weaken, not on
-                # the alias edge, so they are read by entity pair.
-                self.repo.evidence_between_entities(
-                    investigation.id,
-                    relationship.source_entity_id,
-                    relationship.target_entity_id,
-                ),
+        # Strongest first, so the survivor of each handle pair is the best
+        # evidenced one rather than whichever happened to be stored first.
+        ranked = sorted(
+            (
+                relationship
+                for relationship in relationships
+                if relationship.source_entity_id in entities
+                and relationship.target_entity_id in entities
+            ),
+            key=lambda r: -r.confidence_score,
+        )
+
+        aliases = []
+        seen: set[frozenset[str]] = set()
+        for relationship in ranked:
+            source = entities[relationship.source_entity_id]
+            target = entities[relationship.target_entity_id]
+            pair = frozenset(
+                {
+                    identity_key(source.identifier),
+                    identity_key(target.identifier),
+                }
             )
-            for relationship in relationships
-            if relationship.source_entity_id in entities
-            and relationship.target_entity_id in entities
-        ]
+            if pair in seen:
+                continue
+            seen.add(pair)
+            aliases.append(
+                self._to_read(
+                    relationship,
+                    entities,
+                    # Contradictions sit on the relationship they weaken, not
+                    # on the alias edge, so they are read by entity pair.
+                    self.repo.evidence_between_entities(
+                        investigation.id,
+                        relationship.source_entity_id,
+                        relationship.target_entity_id,
+                    ),
+                )
+            )
         logger.info(
             "aliases_listed investigation=%s count=%d", investigation.id, len(aliases)
         )

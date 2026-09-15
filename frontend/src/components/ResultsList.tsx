@@ -80,7 +80,7 @@ function ResultRow({
 
   return (
     <li
-      className="border-b border-line px-3 py-2 last:border-b-0"
+      className="border-b border-line px-4 py-3 last:border-b-0"
       style={selected ? { background: 'var(--color-raised)' } : undefined}
     >
       <div className="flex items-center gap-2">
@@ -114,7 +114,7 @@ function ResultRow({
         )}
 
         <span
-          className={`shrink-0 text-[12px] ${found ? 'text-ink' : 'text-dim'}`}
+          className={`shrink-0 text-[13px] ${found ? 'text-ink' : 'text-dim'}`}
         >
           {result.platform_name}
         </span>
@@ -123,7 +123,7 @@ function ResultRow({
           <button
             onClick={() => result.entity && onSelectEntity(result.entity.id)}
             disabled={!result.entity}
-            className="min-w-0 truncate font-mono text-[11px] text-accent hover:underline disabled:cursor-default disabled:no-underline"
+            className="min-w-0 truncate font-mono text-[13px] text-accent hover:underline disabled:cursor-default disabled:no-underline"
             title={result.display_name ?? result.identifier}
           >
             {result.identifier}
@@ -147,39 +147,46 @@ function ResultRow({
         claim, so the evidence count sits next to the band that rests on it.
       */}
       {result.actionable && (
-        <div className="mt-0.5 flex flex-wrap items-center gap-x-2 gap-y-1 pl-4 font-mono text-[10px] text-faint">
-          <span>
-            {result.evidence_count}{' '}
-            {result.evidence_count === 1 ? 'item of evidence' : 'items of evidence'}
-          </span>
-          {result.contradiction_count > 0 && (
-            <span style={{ color: 'var(--color-contradiction)' }}>
-              {result.contradiction_count} contradicting
-            </span>
-          )}
-          {result.analyst_status && result.analyst_status !== 'UNREVIEWED' && (
-            <span style={{ color: STATUS_COLOR[result.analyst_status] }}>
-              {result.analyst_status.toLowerCase()} by analyst
-            </span>
-          )}
+        <div className="mt-1 flex flex-wrap items-center gap-x-2 gap-y-1 pl-7 text-[11.5px] text-faint">
           {result.display_name && (
             <span className="text-dim">{result.display_name}</span>
+          )}
+          {result.display_name && <span aria-hidden>·</span>}
+          <span>
+            {result.evidence_count}{' '}
+            {result.evidence_count === 1 ? 'piece of evidence' : 'pieces of evidence'}
+          </span>
+          {result.contradiction_count > 0 && (
+            <>
+              <span aria-hidden>·</span>
+              <span style={{ color: 'var(--color-contradiction)' }}>
+                {result.contradiction_count} against
+              </span>
+            </>
+          )}
+          {result.analyst_status && result.analyst_status !== 'UNREVIEWED' && (
+            <>
+              <span aria-hidden>·</span>
+              <span style={{ color: STATUS_COLOR[result.analyst_status] }}>
+                {result.analyst_status.toLowerCase()} by you
+              </span>
+            </>
           )}
         </div>
       )}
 
       {/* Why a source gave nothing back — the point of listing it at all. */}
       {result.reason && (
-        <div className="mt-0.5 pl-4 text-[11px] leading-snug text-faint">
+        <div className="mt-1 pl-7 text-[11.5px] leading-snug text-faint">
           {REASON_LABEL[result.reason] ?? result.detail ?? result.reason}
         </div>
       )}
 
       {result.actionable && (
-        <div className="mt-1 flex flex-wrap items-center gap-1.5 pl-4">
+        <div className="mt-2 flex flex-wrap items-center gap-1.5 pl-7">
           <button
             onClick={() => onSelectRelationship(result.relationship_id!)}
-            className="rounded border border-line px-1.5 py-0.5 font-mono text-[10px] text-dim hover:border-accent hover:text-accent"
+            className="rounded border border-line px-1.5 py-0.5 font-mono text-[11px] text-dim hover:border-accent hover:text-accent"
           >
             view evidence
           </button>
@@ -188,7 +195,7 @@ function ResultRow({
               <button
                 disabled={busy}
                 onClick={() => onVerdict(result.relationship_id!, 'confirm')}
-                className="rounded border border-line px-1.5 py-0.5 font-mono text-[10px] text-dim hover:border-confirmed hover:text-confirmed disabled:opacity-40"
+                className="rounded border border-line px-1.5 py-0.5 font-mono text-[11px] text-dim hover:border-confirmed hover:text-confirmed disabled:opacity-40"
                 title="Record that you judge this association to hold"
               >
                 confirm
@@ -196,7 +203,7 @@ function ResultRow({
               <button
                 disabled={busy}
                 onClick={() => onVerdict(result.relationship_id!, 'reject')}
-                className="rounded border border-line px-1.5 py-0.5 font-mono text-[10px] text-dim hover:border-rejected hover:text-rejected disabled:opacity-40"
+                className="rounded border border-line px-1.5 py-0.5 font-mono text-[11px] text-dim hover:border-rejected hover:text-rejected disabled:opacity-40"
                 title="Record that you judge this association not to hold"
               >
                 reject
@@ -206,7 +213,7 @@ function ResultRow({
             <button
               disabled={busy}
               onClick={() => onVerdict(result.relationship_id!, 'reset')}
-              className="rounded border border-line px-1.5 py-0.5 font-mono text-[10px] text-faint hover:border-line-bright hover:text-dim disabled:opacity-40"
+              className="rounded border border-line px-1.5 py-0.5 font-mono text-[11px] text-faint hover:border-line-bright hover:text-dim disabled:opacity-40"
             >
               clear verdict
             </button>
@@ -216,7 +223,7 @@ function ResultRow({
               href={result.url}
               target="_blank"
               rel="noreferrer noopener"
-              className="font-mono text-[10px] text-faint hover:text-accent"
+              className="font-mono text-[11px] text-faint hover:text-accent"
               title="Open the public page this was read from"
             >
               open ↗
@@ -404,7 +411,7 @@ export default function ResultsList({
 
               {!shut && (
                 <>
-                  <p className="border-b border-line px-3 py-1.5 text-[11px] leading-snug text-faint">
+                  <p className="border-b border-line px-4 py-2 text-[11.5px] leading-snug text-faint">
                     {OUTCOME_NOTE[outcome]}
                   </p>
                   <ul>

@@ -545,3 +545,43 @@ def identity_key(identifier: str | None) -> str:
     this is the single place that has to learn about it.
     """
     return (identifier or "").strip().casefold()
+
+
+def name_token(value: str | None) -> str:
+    """A name flattened for comparison: letters and digits only.
+
+    ``beau.lebens``, ``beau_lebens`` and ``BeauLebens`` all become
+    ``beaulebens``, so a handle written three ways compares equal.
+    """
+    return re.sub(r"[^a-z0-9]", "", (value or "").lower())
+
+
+def domain_belongs_to(domain: str | None, tokens: set[str]) -> bool:
+    """Whether a domain is named after one of these identities.
+
+    ``beaulebens.com`` beside an account called ``beaulebens`` is that
+    person's own site; ``businessinsider.com`` beside the same account is a
+    story they linked to. Offline, nothing else separates the two, and the
+    difference decides whether a shared link means anything at all.
+
+    Matched on the first label, exactly, except for a trailing run of digits
+    on either side - ``alice.dev`` is the personal site of ``alice_98``, and
+    a number stuck on the end of a handle is the commonest way somebody
+    writes the same name twice.
+
+    Anything looser fails badly.  Substring matching in either direction
+    reads as the obvious generalisation, but given a few dozen discovered
+    handles some token is a substring of nearly any domain, and the rule ends
+    up announcing that ``apps.apple.com`` is somebody's personal site.
+    """
+    flat = name_token((domain or "").split(".")[0])
+    # Two or three characters match far too much to mean anything.
+    if len(flat) < 4:
+        return False
+    if flat in tokens:
+        return True
+    return any(
+        (token.startswith(flat) and token[len(flat) :].isdigit())
+        or (flat.startswith(token) and flat[len(token) :].isdigit() and len(token) >= 4)
+        for token in tokens
+    )

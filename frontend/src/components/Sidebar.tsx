@@ -1,5 +1,4 @@
 import type { FilterState, InvestigationDetail, InvestigationGraph } from '../types'
-import ActivityLog from './ActivityLog'
 import Filters from './Filters'
 
 interface Props {
@@ -25,7 +24,14 @@ function Stat({ label, value, tone }: { label: string; value: number; tone?: str
   )
 }
 
-/** Left rail: what this investigation found, what to show, and what happened. */
+/**
+ * Left rail: what this investigation found, and what to show of it.
+ *
+ * Deliberately thin. It used to carry the full activity log and a list of
+ * every source that declined, which between them filled the rail with several
+ * hundred lines an analyst had to scroll past - and both said, less clearly,
+ * what the results view already says per source and in context.
+ */
 export default function Sidebar({
   investigation,
   graph,
@@ -34,12 +40,10 @@ export default function Sidebar({
   showFilters,
 }: Props) {
   const stats = graph?.stats
-  const running =
-    investigation.status === 'CRAWLING' || investigation.status === 'ANALYZING'
 
   return (
-    <aside className="flex w-[280px] shrink-0 flex-col overflow-hidden border-r border-line bg-panel">
-      <div className="flex max-h-[62%] flex-none flex-col overflow-y-auto">
+    <aside className="flex w-[260px] shrink-0 flex-col overflow-y-auto border-r border-line bg-panel">
+      <div className="flex flex-col">
       <section className="border-b border-line px-3 py-3">
         <div className="panel-title">Seed</div>
         <div className="mt-0.5 font-mono text-[13px] text-ink">
@@ -64,31 +68,6 @@ export default function Sidebar({
         />
       </section>
 
-      {investigation.issues.length > 0 && (
-        <section className="border-b border-line px-3 py-3">
-          <div className="panel-title mb-1">Sources unavailable</div>
-          <ul className="space-y-2">
-            {investigation.issues.map((issue, index) => (
-              <li
-                key={`${issue.platform}-${index}`}
-                className="rounded border border-band-medium/40 bg-band-medium/5 px-2 py-1"
-              >
-                <div className="font-mono text-[11px] text-band-medium">
-                  {issue.platform}
-                  {issue.identifier ? `/@${issue.identifier}` : ''} · {issue.reason}
-                </div>
-                <p className="mt-0.5 text-[11px] leading-snug text-faint">
-                  {issue.detail}
-                </p>
-              </li>
-            ))}
-          </ul>
-          <p className="mt-2 text-[11px] leading-snug text-faint">
-            The investigation continues using the evidence already discovered.
-          </p>
-        </section>
-      )}
-
       {showFilters && (
       <section className="border-b border-line px-3 py-3">
         <div className="panel-title mb-2">Filters</div>
@@ -105,9 +84,6 @@ export default function Sidebar({
       )}
       </div>
 
-      <div className="flex min-h-0 flex-1 flex-col border-t border-line">
-        <ActivityLog events={investigation.events} live={running} />
-      </div>
     </aside>
   )
 }

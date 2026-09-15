@@ -36,7 +36,12 @@ from ..repository import Neo4jRepository
 from ..schemas.entity import EntitySummary
 from ..schemas.lead import Lead, LeadList, LeadPriority, LeadType
 from ..utils.logging import get_logger
-from ..utils.normalization import is_identifying_host, normalize_domain
+from ..utils.normalization import (
+    domain_belongs_to,
+    is_identifying_host,
+    name_token,
+    normalize_domain,
+)
 from ..utils.url_parser import detect_platform
 
 logger = get_logger(__name__)
@@ -48,6 +53,64 @@ MEDIUM_THRESHOLD = 40.0
 
 #: A value shared by at least this many entities is a cluster worth a pivot.
 CLUSTER_MIN_ENTITIES = 2
+
+#: Above this many accounts, a shared value stops identifying anybody.
+#:
+#: This is the correction to a rule that had it exactly backwards. A domain
+#: published by two or three accounts is a strong personal pivot - somebody
+#: controls it, and the accounts that point at it are probably theirs. A
+#: domain published by twenty-eight is an employer, a platform or a link
+#: shortener nobody has listed yet. Scoring by "more sharers is stronger"
+#: filled the lead list with automattic.com, wordpress.com and apps.apple.com,
+#: each described as "the strongest publicly observable pivot", each marked
+#: HIGH, and every one of them useless for telling one person from another.
+CLUSTER_MAX_ENTITIES = 8
+
+#: Sharers a domain needs before it is worth reporting on its own.
+#:
+#: Only applies when nothing else connects the domain to the subject. Two
+#: accounts linking to the same news story is a coincidence; four accounts
+#: converging on one small site is a pattern.
+CLUSTER_NOTEWORTHY = 4
+
+
+def _identity_tokens(entities: list[Entity]) -> set[str]:
+    """The names belonging to the person this investigation is about.
+
+    Handles and display names, flattened to letters and digits so that
+    ``beau.lebens``, ``beau_lebens`` and ``BeauLebens`` all compare equal.
+
+    Only the seed and what the seed handle itself found - not the whole
+    graph. A crawl reaches dozens of accounts belonging to companies and
+    products the subject merely links to, and taking names from those made
+    the rule decide that tumblr.com, woocommerce.com and 404media.co were all
+    "their own site", because accounts by those names had been discovered.
+    """
+    tokens: set[str] = set()
+    for entity in entities:
+        if entity.depth > 0 and not entity.is_seed:
+            continue
+        for value in (entity.identifier, entity.display_name):
+            if not value:
+                continue
+            flat = name_token(value)
+            if len(flat) >= 4:
+                tokens.add(flat)
+    return tokens
+
+
+def _cluster_score(base: float, sharers: int) -> float:
+    """How much a value shared by ``sharers`` accounts identifies a person.
+
+    Peaks at the small end and falls away: the whole worth of a shared value
+    is that few things carry it.
+    """
+    if sharers > CLUSTER_MAX_ENTITIES:
+        return 0.0
+    # Two sharers scores highest and each additional one dilutes it, gently
+    # enough that a personal domain listed on half a dozen of somebody's
+    # profiles still reads as the strong lead it is.
+    return max(0.0, base - 6.0 * (sharers - CLUSTER_MIN_ENTITIES))
 
 
 @dataclass
@@ -98,26 +161,54 @@ def shared_website_cluster(context: LeadContext) -> list[Lead]:
                 continue
             clusters[domain].add(entity.id)
 
+    tokens = _identity_tokens(context.entities)
     leads: list[Lead] = []
     for domain, entity_ids in clusters.items():
         if len(entity_ids) < CLUSTER_MIN_ENTITIES:
             continue
-        score = 40.0 + 15.0 * len(entity_ids)
+        count = len(entity_ids)
+        personal = domain_belongs_to(domain, tokens)
+        # Two accounts both linking to a news site is not a finding. Without
+        # a name tying the domain to the subject, a cluster has to be large
+        # enough to be surprising before it is worth an analyst's attention -
+        # otherwise the list fills with nytimes.com and every WordPress
+        # subdomain two of the discovered accounts happen to mention.
+        if not personal and count < CLUSTER_NOTEWORTHY:
+            continue
+        # A site named after somebody here is a lead however many accounts
+        # link to it; that only strengthens the case. Anything else is worth
+        # far less, and worth less still the more accounts share it.
+        score = 95.0 if personal else _cluster_score(60.0, count)
+        if score <= 0:
+            # Linked by too many unrelated accounts to point at one person.
+            continue
         leads.append(
             Lead(
                 id=_lead_id(context.investigation.id, "website", domain),
                 type=LeadType.SHARED_WEBSITE_CLUSTER,
                 priority=_priority(score),
-                title="Shared website connects multiple accounts",
+                title=(
+                    f"{domain} looks like their own site"
+                    if personal
+                    else f"{domain} is linked by {count} accounts"
+                ),
                 description=(
-                    f"{domain} is published by {len(entity_ids)} discovered "
-                    f"entities. A personal domain is the strongest publicly "
-                    f"observable pivot: it is something one party controls."
+                    (
+                        f"{domain} is named after a handle in this "
+                        f"investigation and {count} of the accounts found "
+                        f"here link to it. A site somebody controls is the "
+                        f"best place to look for who they are."
+                    )
+                    if personal
+                    else (
+                        f"{count} of the accounts found here link to "
+                        f"{domain}. Worth a look, but shared links are often "
+                        f"just something both parties read."
+                    )
                 ),
                 suggested_action=(
-                    "Review the connected accounts and the evidence behind "
-                    "each link, then consider crawling the domain for further "
-                    "public references."
+                    f"Open {domain} and look for the names, contact addresses "
+                    f"or profile links it publishes."
                 ),
                 related_entity_ids=sorted(entity_ids),
                 score=score,
@@ -410,16 +501,21 @@ def bridge_entity(context: LeadContext) -> list[Lead]:
         if entity.type == str(EntityType.ACCOUNT):
             continue
 
-        score = 35.0 + 8.0 * len(neighbours)
+        # Same correction as the website clusters: a website joining four
+        # accounts is a lead, one joining twenty-two is a company homepage.
+        score = _cluster_score(88.0, len(neighbours))
+        if score <= 0:
+            continue
         leads.append(
             Lead(
                 id=_lead_id(context.investigation.id, "bridge", entity_id),
                 type=LeadType.BRIDGE_ENTITY,
                 priority=_priority(score),
-                title="Entity connects several others",
+                title=f"{entity.label} connects {len(neighbours)} accounts",
                 description=(
-                    f"{entity.label} sits between {len(neighbours)} other "
-                    f"entities in this investigation."
+                    f"Nothing else in this investigation joins these "
+                    f"{len(neighbours)} accounts together. Whatever links "
+                    f"them runs through {entity.label}."
                 ),
                 suggested_action=(
                     "Expand this entity's connections and review what each "
@@ -524,8 +620,13 @@ class LeadService:
     def __init__(self, repo: Neo4jRepository) -> None:
         self.repo = repo
 
-    def generate(self, investigation: Investigation, limit: int = 50) -> LeadList:
+    def generate(self, investigation: Investigation, limit: int = 15) -> LeadList:
         """Run every rule and return the leads, highest priority first.
+
+        Deliberately short. A lead list is a list of things to do next, and
+        fifty of them is not a list of things to do next - it is the same
+        inventory the results view already holds, sorted differently. The cap
+        is low enough that the bottom of the list is still worth reading.
 
         Computed on request rather than stored: a lead is a statement about the
         graph's *current* state, and a stored one would go stale the moment an

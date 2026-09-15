@@ -97,7 +97,7 @@ def create_investigation(
 @router.get("", response_model=list[InvestigationRead], summary="List investigations")
 def list_investigations(
     repo: Neo4jRepository = Depends(get_repository),
-    limit: int = Query(default=50, ge=1, le=200),
+    limit: int = Query(default=15, ge=1, le=200),
     offset: int = Query(default=0, ge=0),
 ) -> list[InvestigationRead]:
     """Most recent investigations first, with their headline counts."""
@@ -303,7 +303,7 @@ def list_aliases(
 def list_leads(
     investigation_id: str,
     repo: Neo4jRepository = Depends(get_repository),
-    limit: int = Query(default=50, ge=1, le=200),
+    limit: int = Query(default=15, ge=1, le=200),
 ) -> LeadList:
     """What is worth looking at next, derived from evidence already collected.
 
