@@ -226,12 +226,22 @@ async def test_the_tree_grows_downward_from_the_seed(repo) -> None:
         )
 
 
-async def test_no_two_nodes_are_drawn_on_top_of_each_other(repo) -> None:
-    import math
+async def test_no_two_cards_overlap(repo) -> None:
+    """Cards are boxes, so the check has to be about boxes.
 
+    This measured straight-line distance against a single threshold, which
+    quietly assumed a square card. A node actually renders about 185x109 -
+    nearly twice as wide as it is tall - so one number was simultaneously too
+    slack horizontally and far too strict vertically, and the strict half was
+    holding the levels three times further apart than the columns for no
+    reason anyone had checked.
+    """
     from app.schemas.investigation import InvestigationCreate
     from app.services.graph import GraphService
     from app.services.investigation import InvestigationService
+
+    # The measured card, rounded up, so the assertion has a little margin.
+    card_width, card_height = 200, 120
 
     service = InvestigationService(repo)
     created = service.create(
@@ -240,14 +250,13 @@ async def test_no_two_nodes_are_drawn_on_top_of_each_other(repo) -> None:
     await service.run(created)
 
     graph = GraphService(repo).build(created)
-    points = [(node.position.x, node.position.y) for node in graph.nodes]
-    closest = min(
-        math.dist(a, b)
-        for index, a in enumerate(points)
-        for b in points[index + 1 :]
-    )
-    # A node card is about 200px wide.
-    assert closest >= 200, f"two nodes are only {closest:.0f}px apart"
+    points = [(node.id, node.position.x, node.position.y) for node in graph.nodes]
+    for index, (first, x1, y1) in enumerate(points):
+        for second, x2, y2 in points[index + 1 :]:
+            assert abs(x1 - x2) >= card_width or abs(y1 - y2) >= card_height, (
+                f"{first} and {second} overlap: "
+                f"{abs(x1 - x2):.0f}px apart across, {abs(y1 - y2):.0f}px down"
+            )
 
 
 def test_an_empty_investigation_lays_out_to_nothing() -> None:

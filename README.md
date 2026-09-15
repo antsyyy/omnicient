@@ -521,6 +521,12 @@ Levels are **hop distance from the seed, not crawl depth.** They usually agree,
 but a bare handle asks every source about itself at depth zero, so depth alone
 would put the seed shoulder to shoulder with the two dozen accounts it found.
 
+Spacing is set from the measured card, which renders about 185x109 — nearly
+twice as wide as it is tall. Spacing levels as generously as columns therefore
+looked wrong: the gutter came out at 171px down the screen against 55px
+across, so the tree read as three times airier vertically than horizontally
+for no reason anyone had checked. Both are about 60px now.
+
 The cost of a tree is width: a wide fan-out is a wide row. A crowded level is
 therefore stepped alternately up and down, which keeps labels apart and lets
 cards sit closer than a dead-straight row allows — and level baselines

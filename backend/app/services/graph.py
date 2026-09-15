@@ -34,19 +34,25 @@ from ..utils.normalization import platform_label
 logger = get_logger(__name__)
 
 # Layout spacing in React Flow pixels.
-#: Vertical distance between one hop level and the next.
-LEVEL_GAP = 280
-#: Horizontal distance between neighbouring cards. A node is about 200px
-#: wide; this leaves a little air.
-NODE_GAP = 240
+# Card dimensions are measured, not assumed: a node renders about 185x109
+# at zoom 1, so it is nearly twice as wide as it is tall. Spacing the levels
+# as generously as the columns therefore looked wrong - the vertical gutter
+# came out at 171px against 55px horizontally, and the tree read as three
+# times airier down the screen than across it. Both gutters are now about
+# the same, which is what makes it compact without crowding.
+#: Vertical distance between one hop level and the next. 109 of that is card.
+LEVEL_GAP = 170
+#: Horizontal distance between neighbouring cards. 185 of that is card.
+NODE_GAP = 225
 #: A level with more members than this is stepped up and down alternately.
 #: A bare handle asks two dozen sources about itself, and two dozen cards in
 #: one dead-straight row run out of screen long before they run out of
 #: content - the stagger lets the eye follow a line of them and keeps the
 #: labels from crowding, without giving up the shape of a tree.
 STAGGER_ABOVE = 6
-#: How far a stepped node moves off its level.
-STAGGER_STEP = 120
+#: How far a stepped node moves off its level. Enough to break the line of
+#: labels, not so much that a level stops reading as one.
+STAGGER_STEP = 70
 #: Entities no relationship reaches are parked below the tree in a grid, this
 #: many to a row, rather than being hung off a root they have no edge to.
 ORPHAN_COLUMNS = 6
