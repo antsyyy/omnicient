@@ -140,6 +140,7 @@ class LinktreeAdapter(LinkAggregatorAdapter):
     url_template = "https://linktr.ee/{identifier}"
     own_hosts = ("linktr.ee", "linktree")
     generic_titles = frozenset({"linktree", "linktree | blocked account"})
+    probe_present = "github"
 
     #: The page state, including every link and the profile around it.
     NEXT_DATA_RE = re.compile(
@@ -224,6 +225,7 @@ class SoloToAdapter(LinkAggregatorAdapter):
     url_template = "https://solo.to/{identifier}"
     own_hosts = ("solo.to",)
     generic_titles = frozenset({"solo", "solo.to"})
+    probe_present = "nasa"
 
     def extract_display_name(self, title: str) -> str | None:
         """``NASA · solo.to`` -> ``NASA``."""
@@ -239,3 +241,4 @@ class BioLinkAdapter(LinkAggregatorAdapter):
     url_template = "https://bio.link/{identifier}"
     own_hosts = ("bio.link",)
     generic_titles = frozenset({"bio.link", "bio link"})
+    probe_present = "nasa"

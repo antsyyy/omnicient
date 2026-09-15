@@ -38,6 +38,7 @@ class HackerNewsAdapter(JsonProfileAdapter):
     category = SourceCategory.DEV
     api_template = "https://hacker-news.firebaseio.com/v0/user/{identifier}.json"
     url_template = "https://news.ycombinator.com/user?id={identifier}"
+    probe_present = "pg"
 
     def parse_json(
         self, identifier: str, payload: Any, url: str
@@ -71,6 +72,7 @@ class HuggingFaceAdapter(JsonProfileAdapter):
     category = SourceCategory.DEV
     api_template = "https://huggingface.co/api/users/{identifier}/overview"
     url_template = "https://huggingface.co/{identifier}"
+    probe_present = "julien-c"
 
     def parse_json(
         self, identifier: str, payload: Any, url: str
@@ -116,6 +118,7 @@ class CratesIoAdapter(JsonProfileAdapter):
     category = SourceCategory.DEV
     api_template = "https://crates.io/api/v1/users/{identifier}"
     url_template = "https://crates.io/users/{identifier}"
+    probe_present = "carols10cents"
 
     def parse_json(
         self, identifier: str, payload: Any, url: str
@@ -147,6 +150,7 @@ class DockerHubAdapter(JsonProfileAdapter):
     category = SourceCategory.DEV
     api_template = "https://hub.docker.com/v2/users/{identifier}/"
     url_template = "https://hub.docker.com/u/{identifier}"
+    probe_present = "bmitch"
 
     def parse_json(
         self, identifier: str, payload: Any, url: str
@@ -189,6 +193,7 @@ class StackOverflowAdapter(JsonProfileAdapter):
         "https://api.stackexchange.com/2.3/users"
         "?inname={identifier}&site=stackoverflow&order=desc&sort=reputation"
     )
+    probe_present = "Jon Skeet"
     url_template = "https://stackoverflow.com/users?tab=Reputation"
 
     def normalize_identifier(self, identifier: str) -> str:
@@ -257,6 +262,7 @@ class LaunchpadAdapter(JsonProfileAdapter):
     category = SourceCategory.DEV
     api_template = "https://api.launchpad.net/1.0/~{identifier}"
     url_template = "https://launchpad.net/~{identifier}"
+    probe_present = "mark"
 
     def parse_json(
         self, identifier: str, payload: Any, url: str
@@ -292,8 +298,12 @@ class LobstersAdapter(JsonProfileAdapter):
     platform = "lobsters"
     name = "Lobsters"
     category = SourceCategory.DEV
-    api_template = "https://lobste.rs/u/{identifier}.json"
-    url_template = "https://lobste.rs/u/{identifier}"
+    # The site moved from /u/<name> to /~<name>; the old path still answers,
+    # but with a 301 to the HTML page, so a JSON request quietly got a web
+    # page instead of an error. Found by the self-check.
+    api_template = "https://lobste.rs/~{identifier}.json"
+    url_template = "https://lobste.rs/~{identifier}"
+    probe_present = "jcs"
 
     #: Fields naming an account elsewhere, and how to build its URL.
     LINKED_ACCOUNTS = (

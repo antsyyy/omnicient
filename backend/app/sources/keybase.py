@@ -46,6 +46,7 @@ class KeybaseAdapter(JsonProfileAdapter):
     category = SourceCategory.IDENTITY
     api_template = "https://keybase.io/_/api/1.0/user/lookup.json?username={identifier}"
     url_template = "https://keybase.io/{identifier}"
+    probe_present = "chris"
 
     def parse_json(
         self, identifier: str, payload: Any, url: str

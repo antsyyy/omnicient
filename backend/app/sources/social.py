@@ -62,6 +62,7 @@ class TelegramAdapter(OpenGraphProfileAdapter):
     category = SourceCategory.SOCIAL
     url_template = "https://t.me/{identifier}"
     generic_titles = frozenset({"telegram", "telegram messenger"})
+    probe_present = "durov"
 
     def parse_profile(
         self, identifier: str, html: str, url: str
@@ -99,6 +100,7 @@ class MediumAdapter(OpenGraphProfileAdapter):
     category = SourceCategory.SOCIAL
     url_template = "https://medium.com/@{identifier}"
     generic_titles = frozenset({"medium"})
+    probe_present = "dhh"
 
     def extract_display_name(self, title: str) -> str | None:
         """``DHH – Medium`` -> ``DHH``."""

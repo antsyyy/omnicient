@@ -26,6 +26,7 @@ class CodewarsAdapter(JsonProfileAdapter):
     category = SourceCategory.LEARNING
     api_template = "https://www.codewars.com/api/v1/users/{identifier}"
     url_template = "https://www.codewars.com/users/{identifier}"
+    probe_present = "g964"
 
     def parse_json(
         self, identifier: str, payload: Any, url: str
@@ -71,6 +72,7 @@ class ScratchAdapter(JsonProfileAdapter):
     category = SourceCategory.LEARNING
     api_template = "https://api.scratch.mit.edu/users/{identifier}"
     url_template = "https://scratch.mit.edu/users/{identifier}"
+    probe_present = "griffpatch"
 
     def parse_json(
         self, identifier: str, payload: Any, url: str
@@ -116,6 +118,7 @@ class DuolingoAdapter(JsonProfileAdapter):
     category = SourceCategory.LEARNING
     api_template = "https://www.duolingo.com/2017-06-30/users?username={identifier}"
     url_template = "https://www.duolingo.com/profile/{identifier}"
+    probe_present = "duolingo"
 
     def parse_json(
         self, identifier: str, payload: Any, url: str

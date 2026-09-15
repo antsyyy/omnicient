@@ -613,6 +613,18 @@ class SourceAdapter(ABC):
     name: str = ""
     #: Which kind of site this is, for grouping in the UI and the profile.
     category: SourceCategory = SourceCategory.SOCIAL
+
+    #: A handle that really does have a public profile on this platform.
+    #:
+    #: Used by the self-check (``python -m app.selfcheck``) to notice when a
+    #: site changes its markup and an adapter quietly stops finding anybody.
+    #: Pick something stable and obviously public - a platform's own account,
+    #: a well-known project - never a private individual.
+    probe_present: str = ""
+    #: A handle that does not exist, to catch the opposite failure: a source
+    #: that answers "found" for everything. Telegram did exactly that, for
+    #: months, because it serves a valid-looking card for every URL.
+    probe_absent: str = "zz-omnicient-absent-4471"
     #: How this platform expects a credential to be presented.
     auth_scheme: str = "Bearer"
     #: Set by the concrete adapters, which all take a shared fetcher.

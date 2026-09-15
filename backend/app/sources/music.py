@@ -47,6 +47,7 @@ class SoundCloudAdapter(OpenGraphProfileAdapter):
     category = SourceCategory.MUSIC
     url_template = "https://soundcloud.com/{identifier}"
     generic_titles = frozenset({"soundcloud", "discover", "stream"})
+    probe_present = "octobersveryown"
 
     def extract_bio(self, meta: dict[str, str], html: str) -> str | None:
         """Return the artist's own text, not SoundCloud's pitch for itself.
@@ -74,6 +75,7 @@ class LastFmAdapter(OpenGraphProfileAdapter):
     category = SourceCategory.MUSIC
     url_template = "https://www.last.fm/user/{identifier}"
     generic_titles = frozenset({"last.fm", "music profile | last.fm"})
+    probe_present = "rj"
 
     def extract_display_name(self, title: str) -> str | None:
         """``RJ's Music Profile | Last.fm`` -> ``RJ``."""

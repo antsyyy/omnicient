@@ -65,6 +65,14 @@ PROFILE_PATH_REQUIRED: frozenset[str] = frozenset(
 #: songs became a page full of people.
 CONTENT_ONLY_HOSTS: frozenset[str] = frozenset({"youtu.be", "redd.it", "fb.me"})
 
+#: Platforms that mark a handle with a sigil instead of a path prefix.
+#:
+#: ``lobste.rs/~jcs`` is a person and ``lobste.rs/s/abc`` is a story, so the
+#: prefix cannot simply be optional - but the sigil is not a path segment
+#: either. Where a platform is listed here, a first segment carrying the sigil
+#: *is* the handle.
+PROFILE_PATH_SIGILS: dict[str, str] = {"lobsters": "~", "launchpad": "~"}
+
 #: Platforms that name the account in a query parameter rather than the path,
 #: e.g. ``news.ycombinator.com/user?id=alice``.
 PROFILE_QUERY_PARAM: dict[str, str] = {"hackernews": "id"}
@@ -213,7 +221,11 @@ def parse_profile_url(url: str | None) -> tuple[str, str] | None:
     prefixes = PROFILE_PATH_PREFIXES.get(platform, ())
     # Sigils platforms put in front of a handle: "@alice", "~alice".
     first = segments[0].lstrip("@~").lower()
-    if first in prefixes:
+    sigil = PROFILE_PATH_SIGILS.get(platform)
+    if sigil and segments[0].startswith(sigil):
+        # The sigil marks the handle directly: lobste.rs/~jcs.
+        raw = segments[0]
+    elif first in prefixes:
         param = PROFILE_QUERY_PARAM.get(platform)
         if param:
             # ``news.ycombinator.com/user?id=alice``

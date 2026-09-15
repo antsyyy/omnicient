@@ -30,6 +30,7 @@ class GitHubAdapter(JsonProfileAdapter):
     category = SourceCategory.DEV
     api_template = "https://api.github.com/users/{identifier}"
     url_template = "https://github.com/{identifier}"
+    probe_present = "torvalds"
     # GitHub's documented versioned media type; a plain HTML Accept is refused
     # with 415.
     accept = "application/vnd.github+json"

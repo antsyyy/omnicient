@@ -39,6 +39,7 @@ class SteamAdapter(XmlProfileAdapter):
     category = SourceCategory.GAMING
     api_template = "https://steamcommunity.com/id/{identifier}/?xml=1"
     url_template = "https://steamcommunity.com/id/{identifier}"
+    probe_present = "gaben"
 
     def parse_xml(
         self, identifier: str, soup: BeautifulSoup, url: str
@@ -97,6 +98,7 @@ class ChessComAdapter(JsonProfileAdapter):
     category = SourceCategory.GAMING
     api_template = "https://api.chess.com/pub/player/{identifier}"
     url_template = "https://www.chess.com/member/{identifier}"
+    probe_present = "hikaru"
 
     def parse_json(
         self, identifier: str, payload: Any, url: str

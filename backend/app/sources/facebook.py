@@ -39,6 +39,7 @@ class FacebookAdapter(OpenGraphProfileAdapter):
     platform = "facebook"
     name = "Facebook"
     url_template = "https://www.facebook.com/{identifier}"
+    probe_present = "zuck"
 
     def extract_bio(self, meta: dict[str, str], html: str) -> str | None:
         """Return the page description without its engagement counts.

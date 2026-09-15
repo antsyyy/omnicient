@@ -32,6 +32,7 @@ class ThreadsAdapter(OpenGraphProfileAdapter):
     platform = "threads"
     name = "Threads"
     url_template = "https://www.threads.net/@{identifier}"
+    probe_present = "zuck"
 
     def extract_bio(self, meta: dict[str, str], html: str) -> str | None:
         """Return the biography without the audience counts.

@@ -26,6 +26,7 @@ class BlueskyAdapter(JsonProfileAdapter):
     api_template = (
         "https://public.api.bsky.app/xrpc/app.bsky.actor.getProfile?actor={identifier}"
     )
+    probe_present = "bsky.app"
     url_template = "https://bsky.app/profile/{identifier}"
 
     def api_url(self, identifier: str) -> str:

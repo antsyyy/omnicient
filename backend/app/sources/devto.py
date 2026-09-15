@@ -29,6 +29,7 @@ class DevToAdapter(JsonProfileAdapter):
     category = SourceCategory.DEV
     api_template = "https://dev.to/api/users/by_username?url={identifier}"
     url_template = "https://dev.to/{identifier}"
+    probe_present = "ben"
 
     def parse_json(
         self, identifier: str, payload: Any, url: str

@@ -30,6 +30,7 @@ class GravatarAdapter(JsonProfileAdapter):
     category = SourceCategory.IDENTITY
     api_template = "https://gravatar.com/{identifier}.json"
     url_template = "https://gravatar.com/{identifier}"
+    probe_present = "beau"
 
     def parse_json(
         self, identifier: str, payload: Any, url: str
