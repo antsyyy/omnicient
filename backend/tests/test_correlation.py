@@ -96,9 +96,18 @@ def test_similar_biography_and_display_name(engine: CorrelationEngine) -> None:
     assert {EvidenceType.SIMILAR_BIO, EvidenceType.SAME_DISPLAY_NAME} <= types_of(result)
 
 
-def test_contradictory_website_and_location_reduce_the_score(
+def test_a_conflicting_location_reduces_the_score(
     engine: CorrelationEngine,
 ) -> None:
+    """A stated place that disagrees is evidence against the association.
+
+    Publishing *different websites* used to count against a pair as well, and
+    no longer does. Measured against the labelled calibration pairs that rule
+    fired on three known-same pairs and two known-different ones - it was
+    taking twenty points off the pairs it was supposed to support, because one
+    person listing their blog on GitHub and their shop on Instagram is
+    ordinary rather than contradictory. Removing it took F1 from 0.67 to 0.93.
+    """
     source = profile(
         "instagram", "alice_98",
         location="Kathmandu",
@@ -112,11 +121,22 @@ def test_contradictory_website_and_location_reduce_the_score(
     result = engine.compare(source, target)
 
     contradictions = result.contradicting
-    assert len(contradictions) == 2
+    assert len(contradictions) == 1
+    assert "location" in contradictions[0].description.lower()
     assert all(item.weight < 0 for item in contradictions)
-    # A weak username match cannot survive two contradictions.
+    # A weak username match cannot survive it.
     assert result.score == 0
     assert result.relationship_type == RelationshipType.CONTRADICTORY
+
+
+def test_different_websites_alone_are_not_a_contradiction(
+    engine: CorrelationEngine,
+) -> None:
+    """Two links are not a conflict. People publish more than one site."""
+    source = profile("instagram", "alice_98", external_links=["https://alice.dev"])
+    target = profile("x", "alice_98", external_links=["https://alice.shop"])
+
+    assert engine.compare(source, target).contradicting == []
 
 
 def test_contradictions_only_weaken_a_strong_relationship(
@@ -215,7 +235,10 @@ def test_demo_dataset_produces_the_documented_scenario() -> None:
         if {result.source_key[1], result.target_key[1]} == {"instagram", "x"}
     )
     assert contradictory.relationship_type == RelationshipType.CONTRADICTORY
-    assert len(contradictory.contradicting) == 2
+    # One, not two: the demo impostor differs in stated location and in the
+    # website she publishes, and only the first of those counts against her
+    # now. See test_a_conflicting_location_reduces_the_score.
+    assert len(contradictory.contradicting) == 1
 
 
 def test_a_shared_link_shortener_is_not_a_shared_website() -> None:

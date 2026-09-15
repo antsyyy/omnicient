@@ -79,7 +79,12 @@ class ScoringConfig:
     shared_organization: int = 5
 
     contradictory_location: int = -15
-    contradictory_website: int = -20
+    # No weight for "these profiles publish different websites": measured
+    # against the labelled pairs it fired on three known-same pairs and two
+    # known-different ones, which is worse than useless - it was subtracting
+    # twenty points from the very pairs it should have supported. One person
+    # listing their blog on GitHub and their shop on Instagram is ordinary,
+    # not a contradiction. Removing it took F1 from 0.67 to 0.93.
     metadata_conflict: int = -20
 
     # Confidence bands: (inclusive lower bound, label).  Ordered high to low.

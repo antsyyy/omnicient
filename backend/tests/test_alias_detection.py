@@ -187,8 +187,8 @@ def test_detect_runs_over_the_demo_dataset() -> None:
     }
     assert ("alice-security", "alice_security") in pairs
 
-    # The deliberate near-miss must be present but weak: it looks alike and
-    # contradicts on website and location.
+    # The deliberate near-miss must be present but visibly weak: it looks
+    # alike, and the evidence contradicts it on location.
     near_miss = next(
         (c for c in candidates if {c.source_identifier, c.target_identifier}
          == {"alice_98", "alice98"}),
@@ -196,7 +196,15 @@ def test_detect_runs_over_the_demo_dataset() -> None:
     )
     assert near_miss is not None
     assert near_miss.strength is AliasStrength.STRONG   # the handles do resemble
-    assert near_miss.confidence == "LOW"                # the evidence does not
+    # MEDIUM rather than LOW, for the reason recorded at length in
+    # test_api.py::test_a_resembling_but_contradicted_alias_stays_weak: dropping
+    # the website contradiction was a measured gain for the correlation model
+    # (F1 0.67 -> 0.93 on the labelled pairs) and it cost this pair the twenty
+    # points that used to hold it down. What holds it up now is the alias
+    # detector's own resemblance base, which is worth 35 unaided - a number
+    # that wants calibrating against labelled aliases rather than tuning by
+    # hand against this one demo case.
+    assert near_miss.confidence == "MEDIUM"
     assert near_miss.contradicting_evidence
 
 

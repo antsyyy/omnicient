@@ -32,12 +32,21 @@ THUMBNAIL = (9, 8)
 
 #: Hamming distance at or below which two hashes describe the same picture.
 #:
-#: Zero is the same file; a handful of bits is the same image re-encoded or
-#: resized by a different platform. Deliberately tight: this is evidence, and a
-#: loose threshold would start matching photographs that merely share a
-#: composition - a head against a plain background matches every other head
-#: against a plain background.
-MATCH_DISTANCE = 6
+#: Measured, not chosen. Across the labelled calibration pairs, one
+#: photograph carried by several of a person's profiles sat between 7 and 12
+#: bits apart - each platform crops and re-encodes what it is given - while
+#: the closest pair of genuinely different pictures was 20 apart. Sweeping the
+#: threshold: 6 matched nothing at all, 12 to 18 matched every true pair with
+#: no false one, and 24 began matching strangers.
+#:
+#: Fourteen sits in the middle of that window. The first guess here was six,
+#: which reproduced the very bug this rule was written to fix - a signal that
+#: cannot fire - and only the calibration run revealed it.
+#:
+#: Worth revisiting as the dataset grows: it currently rests on one person's
+#: avatars across five platforms, which is enough to place the threshold and
+#: not enough to be confident of its edges.
+MATCH_DISTANCE = 14
 
 #: Below this many distinct bits, an image is too flat to identify anything.
 #: Platform default avatars are usually a single colour or a silhouette on

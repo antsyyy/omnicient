@@ -28,11 +28,10 @@ from ..models.enums import (
     RelationshipType,
 )
 from ..sources.base import ObservedProfile
-from ..utils.imagehash import (
-    MATCH_DISTANCE,
-    hamming_distance,
-    looks_like_default_avatar,
-)
+
+# Imported as a module so the threshold is read when the rule runs. The
+# calibration harness sweeps it, and a by-value import would silently pin it.
+from ..utils import imagehash
 from ..utils.logging import get_logger
 from ..utils.normalization import (
     is_identifying_host,
@@ -133,7 +132,6 @@ class CorrelationEngine:
             self._username,
             self._display_name,
             self._shared_organization,
-            self._contradictory_website,
             self._contradictory_location,
             self._conflicting_email,
         ):
@@ -334,17 +332,17 @@ class CorrelationEngine:
         # A placeholder is not somebody's face. Two accounts that both never
         # uploaded a picture are served the same address, and reading that as
         # evidence links strangers for having nothing in common.
-        if looks_like_default_avatar(source.avatar_url) or looks_like_default_avatar(
-            target.avatar_url
-        ):
+        if imagehash.looks_like_default_avatar(
+            source.avatar_url
+        ) or imagehash.looks_like_default_avatar(target.avatar_url):
             return None
 
         first_url = normalize_url(source.avatar_url)
         second_url = normalize_url(target.avatar_url)
         same_address = bool(first_url and first_url == second_url)
 
-        distance = hamming_distance(source.avatar_hash, target.avatar_hash)
-        same_image = distance is not None and distance <= MATCH_DISTANCE
+        distance = imagehash.hamming_distance(source.avatar_hash, target.avatar_hash)
+        same_image = distance is not None and distance <= imagehash.MATCH_DISTANCE
         if not same_address and not same_image:
             return None
 
@@ -493,26 +491,6 @@ class CorrelationEngine:
 
     # -- contradictions ----------------------------------------------------
 
-    def _contradictory_website(
-        self, source: ObservedProfile, target: ObservedProfile
-    ) -> EvidenceItem | None:
-        """Both profiles publish a website, and they have none in common."""
-        first = self._website_identities(source)
-        second = self._website_identities(target)
-        if not first or not second or set(first) & set(second):
-            return None
-        return EvidenceItem(
-            type=EvidenceType.CONTRADICTORY_ATTRIBUTE,
-            description=(
-                f"Different public websites: @{source.identifier} publishes "
-                f"{sorted(first)[0]}, @{target.identifier} publishes "
-                f"{sorted(second)[0]}"
-            ),
-            weight=self.scoring.contradictory_website,
-            supports=False,
-            source_url=target.url,
-            extracted_value=f"{sorted(first)[0]} vs {sorted(second)[0]}",
-        )
 
     def _contradictory_location(
         self, source: ObservedProfile, target: ObservedProfile

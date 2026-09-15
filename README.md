@@ -37,6 +37,7 @@ observation contributed, and the contradictions that argue against them.
 - [Investigation canvas](#investigation-canvas)
 - [Analysis layer](#analysis-layer)
 - [Correlation methodology](#correlation-methodology)
+  - [Calibration](#calibration)
 - [Confidence scoring](#confidence-scoring)
 - [Crawler behaviour and limitations](#crawler-behaviour-and-limitations)
 - [Security protections](#security-protections)
@@ -592,10 +593,9 @@ flowchart TD
     R --> S6["Same / similar username +10 / +5"]
     R --> S7["Same display name +5"]
     R --> S8["Shared organization +5"]
-    R --> N1["Contradictory website −20"]
-    R --> N2["Metadata conflict −20"]
-    R --> N3["Conflicting location −15"]
-    S1 & S2 & S3 & S4 & S5 & S6 & S7 & S8 & N1 & N2 & N3 --> SUM["Sum, clamped to 0–100"]
+    R --> N1["Metadata conflict −20"]
+    R --> N2["Conflicting location −15"]
+    S1 & S2 & S3 & S4 & S5 & S6 & S7 & S8 & N1 & N2 --> SUM["Sum, clamped to 0–100"]
     SUM --> BAND["Confidence band"]
     BAND --> TYPE["Relationship type"]
 ```
@@ -615,11 +615,67 @@ Design decisions worth knowing:
   existing.
 - **Weak signals are labelled weak.** Evidence text for username and display
   name matches says so explicitly, in the analyst's own words, not just numerically.
-- **Avatar matching compares normalized image URLs** in the MVP — it catches one
-  image reused across platforms, not a re-encoded copy. Perceptual hashing is
-  the obvious next step and slots into the same evidence type.
+- **Avatar matching compares perceptual hashes, not URLs.** Every platform
+  serves the same photograph from a different address — a signed Instagram CDN
+  URL, `avatars.githubusercontent.com/u/1234`, a hash of an email at Gravatar —
+  so URL comparison could only ever fire for two accounts on the *same* site,
+  which is not the case the rule exists for. Each avatar is reduced to a 64-bit
+  difference hash (`backend/app/utils/imagehash.py`) that survives the
+  rescaling and re-encoding an upload goes through, and two profiles match when
+  the hashes are within 14 bits. Flat images, addresses that name themselves a
+  default, and any picture carried by more than four accounts are all refused,
+  because a platform's placeholder would otherwise link every account that
+  never uploaded a photograph. This deliberately does **not** compare faces:
+  two different photographs of the same person will not match, and guessing at
+  that is a claim the evidence cannot support.
 
 All point values live in one place, `ScoringConfig` in `backend/app/config.py`.
+
+### Calibration
+
+Every weight above is a number somebody chose. `python -m app.calibration`
+turns that into a measurement: it scores 22 labelled pairs of real public
+profiles and reports how well the model separates the ones that belong together
+from the ones that do not.
+
+The labels come from the accounts themselves — a Gravatar's verified accounts,
+a Linktree, a Keybase proof — because a connection the owner published is the
+strongest ground truth public data offers. Which creates an obvious
+circularity: if the label comes from an explicit link and the model scores
+explicit links at seventy, the run mostly measures whether it can read a link
+it was handed. So the harness runs **twice**, and the second pass drops
+`EXPLICIT_LINK` entirely and asks whether the remaining signals could have
+recovered a connection we know is real. That blind number is the one worth
+quoting:
+
+```
+  WITHOUT the declared link (can the model infer it?)
+  mean score: 34.3 when same, 1.3 when different
+
+    evidence type              fires on same  on different
+    SAME_DISPLAY_NAME                     7             0
+    SAME_AVATAR                           4             0
+    SAME_USERNAME                         4             0
+    CONTRADICTORY_ATTRIBUTE               2             6
+```
+
+That last column is the actionable one, and it found two real faults the first
+time it was read:
+
+- **The avatar threshold matched nothing.** It was set to 6 bits by guess. The
+  same photograph across platforms actually sits 7–12 bits apart, so the rule
+  written to catch re-encoded copies could not fire on a single true pair — the
+  very bug it existed to fix. Raised to 14, measured.
+- **The website contradiction was backwards.** "These profiles publish
+  different websites" fired on three known-same pairs and two known-different
+  ones — it was subtracting twenty points from the pairs it should have
+  supported. One person listing their blog on GitHub and their shop on
+  Instagram is ordinary, not a conflict. Removing it took F1 from 0.67 to 0.93.
+
+Both findings were invisible to the test suite, which could only confirm that
+the rules did what they were written to do, not whether what they were written
+to do was right. The dataset lives in `backend/calibration/` and the
+regression tests in `backend/tests/test_calibration.py` hold the floor.
 
 ---
 
@@ -996,7 +1052,7 @@ possible later without a migration.
 ```bash
 cd backend
 source .venv/bin/activate
-pytest              # 301 tests
+pytest              # 495 tests
 ruff check .        # lint
 ```
 
