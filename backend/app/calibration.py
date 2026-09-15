@@ -49,7 +49,13 @@ from .utils.logging import get_logger
 logger = get_logger(__name__)
 
 #: Labelled pairs live beside the code so a run is reproducible and offline.
-DATASET = Path(__file__).resolve().parent.parent / "calibration" / "pairs.json"
+CALIBRATION = Path(__file__).resolve().parent.parent / "calibration"
+DATASET = CALIBRATION / "pairs.json"
+#: The observed profiles the pairs refer to, captured by the project's own
+#: adapters. Kept separate so one profile can appear in many pairs without
+#: being copied into each - a profile that differs between two pairs would be
+#: a silent inconsistency in the ground truth.
+CAPTURED = CALIBRATION / "profiles.json"
 
 #: Evidence that simply restates the label, excluded in the blind pass.
 DECLARED_TYPES = frozenset({"EXPLICIT_LINK"})
@@ -124,6 +130,24 @@ class Report:
     #: on the different-party ones.
     CONTRADICTING = frozenset({"CONTRADICTORY_ATTRIBUTE"})
 
+    def uninferable(self) -> list[Outcome]:
+        """Known-same pairs left with no evidence at all by the blind pass.
+
+        Not a failure of the model, and worth separating from one. An account
+        and its owner's personal website are tied together by exactly one
+        thing - the link the owner published - because a website has no
+        username to match, no avatar to compare and no display name to argue
+        about. Remove the declaration and there is nothing left to reason
+        from, and there is no weighting of the remaining rules that could
+        recover the pair.
+
+        They stay in the dataset, because the declared pass is a real
+        measurement and they belong in it. But a blind recall number that
+        counts them as misses is describing the dataset's composition, not the
+        model's inferential power, so the report says how many there are.
+        """
+        return [o for o in self.positives if not o.evidence]
+
     def evidence_usage(self) -> dict[str, tuple[int, int]]:
         """How often each evidence type fires on a true pair, and a false one.
 
@@ -144,21 +168,31 @@ class Report:
 
 
 def load_pairs(path: Path | None = None) -> list[Pair]:
-    """Read the labelled dataset."""
+    """Read the labelled dataset, resolving each pair's profile references."""
     source = path or DATASET
     raw = json.loads(source.read_text())
-    pairs = []
-    for entry in raw["pairs"]:
-        pairs.append(
-            Pair(
-                name=entry["name"],
-                same=bool(entry["same"]),
-                basis=entry.get("basis", ""),
-                source=ObservedProfile(**entry["a"]),
-                target=ObservedProfile(**entry["b"]),
-            )
+    captured = json.loads((source.parent / CAPTURED.name).read_text())
+
+    def profile(reference: str) -> ObservedProfile:
+        try:
+            return ObservedProfile(**captured[reference])
+        except KeyError:
+            raise KeyError(
+                f"{source.name} refers to profile {reference!r}, which is not in "
+                f"{CAPTURED.name}. Capture it with "
+                f"`python -m calibration.capture fetch {reference}`."
+            ) from None
+
+    return [
+        Pair(
+            name=entry["name"],
+            same=bool(entry["same"]),
+            basis=entry.get("basis", ""),
+            source=profile(entry["a"]),
+            target=profile(entry["b"]),
         )
-    return pairs
+        for entry in raw["pairs"]
+    ]
 
 
 def evaluate(
@@ -233,8 +267,25 @@ def render(report: Report) -> None:
     missed = [o for o in report.positives if o.score < 50]
     if missed:
         print("\n    known-same pairs the model scored under 50:")
-        for outcome in sorted(missed, key=lambda o: o.score)[:6]:
+        for outcome in sorted(missed, key=lambda o: o.score)[:8]:
             print(f"      {outcome.score:>5.0f}  {outcome.pair.name}")
+
+    blank = report.uninferable()
+    if blank:
+        print(
+            f"\n    {len(blank)} of the known-same pairs have no evidence left at all,"
+            "\n    and are counted as misses above. Every one of them pairs an account"
+            "\n    with its owner's website, which carries no username, avatar or"
+            "\n    display name to compare - so the declaration was the only evidence"
+            "\n    that could ever have existed for it. Excluding them, the"
+            f"\n    account-to-account pairs average {_mean_without(report, blank):.1f}."
+        )
+
+
+def _mean_without(report: Report, excluded: list[Outcome]) -> float:
+    """Mean positive score ignoring the listed outcomes."""
+    keep = [o for o in report.positives if o not in excluded]
+    return sum(o.score for o in keep) / (len(keep) or 1)
 
 
 def main(argv: list[str] | None = None) -> int:

@@ -634,30 +634,41 @@ All point values live in one place, `ScoringConfig` in `backend/app/config.py`.
 ### Calibration
 
 Every weight above is a number somebody chose. `python -m app.calibration`
-turns that into a measurement: it scores 22 labelled pairs of real public
-profiles and reports how well the model separates the ones that belong together
-from the ones that do not.
+turns that into a measurement: it scores 52 labelled pairs drawn from 45 real
+public profiles and reports how well the model separates the ones that belong
+together from the ones that do not.
 
 The labels come from the accounts themselves — a Gravatar's verified accounts,
-a Linktree, a Keybase proof — because a connection the owner published is the
-strongest ground truth public data offers. Which creates an obvious
-circularity: if the label comes from an explicit link and the model scores
-explicit links at seventy, the run mostly measures whether it can read a link
-it was handed. So the harness runs **twice**, and the second pass drops
+a Keybase proof, a website named on a profile — because a connection the owner
+published is the strongest ground truth public data offers. Which creates an
+obvious circularity: if the label comes from an explicit link and the model
+scores explicit links at seventy, the run mostly measures whether it can read a
+link it was handed. So the harness runs **twice**, and the second pass drops
 `EXPLICIT_LINK` entirely and asks whether the remaining signals could have
 recovered a connection we know is real. That blind number is the one worth
 quoting:
 
 ```
   WITHOUT the declared link (can the model infer it?)
-  mean score: 34.3 when same, 1.3 when different
+  22 pairs known same, 30 known different
+  mean score: 21.6 when same, 1.3 when different
 
     evidence type              fires on same  on different
-    SAME_DISPLAY_NAME                     7             0
-    SAME_AVATAR                           4             0
-    SAME_USERNAME                         4             0
-    CONTRADICTORY_ATTRIBUTE               2             6
+    SAME_DISPLAY_NAME                    14             0
+    SAME_AVATAR                           7             0
+    SAME_WEBSITE                          7             1
+    SAME_USERNAME                         7             4
+    SIMILAR_BIO                           4             0
+    CONTRADICTORY_ATTRIBUTE               2             8
 ```
+
+The most valuable pairs are the ones where **neither profile links to the
+other** — `github:simonw` and `bluesky:simonwillison.net`, or `github:ornicar`
+and `lichess:thibault`, whose handles share nothing at all. Both are tied
+together by a chain of declarations that passes through a third page, so the
+model cannot read the answer anywhere; it has to recover it from a name, a
+photograph, a biography. A dataset of directly declared pairs alone cannot test
+that, which is why `capture.py` reports implied pairs separately.
 
 That last column is the actionable one, and it found two real faults the first
 time it was read:
@@ -674,8 +685,60 @@ time it was read:
 
 Both findings were invisible to the test suite, which could only confirm that
 the rules did what they were written to do, not whether what they were written
-to do was right. The dataset lives in `backend/calibration/` and the
-regression tests in `backend/tests/test_calibration.py` hold the floor.
+to do was right.
+
+**Two things the run is careful to be honest about.**
+
+Six known-same pairs score **zero** blind, and they are counted as misses in
+the headline number. Every one ties an account to its owner's personal
+website — which has no username, no avatar and no display name — so the
+declaration was not merely the best evidence available but the only evidence
+that could ever have existed. Excluding those, the account-to-account pairs
+average 29.7 against 1.3 for strangers. Both figures are printed, and a test
+(`test_the_uninferable_pairs_are_exactly_the_website_ones`) fails if that
+exclusion ever grows to cover a pair of *accounts*, which would mean the model
+had quietly stopped observing something.
+
+The one remaining false positive is worth naming rather than fixing by feel: an
+Automattic employee and the WordPress brand account score 20 for publishing the
+same website, `wordpress.com`. A shared *personal* domain is strong evidence and
+a shared *employer* domain is close to none, which is the same distinction the
+avatar rule already makes when it ignores a picture carried by many accounts.
+One counter-example is not enough to fit a rule to, so it is recorded here and
+left alone — tuning a weight against a single pair is what this harness exists
+to replace.
+
+### Extending the dataset
+
+```bash
+python -m calibration.capture fetch github:simonw bluesky:simonwillison.net
+python -m calibration.capture suggest
+```
+
+`fetch` runs the project's own adapters, so a captured profile is exactly what
+a crawl would have seen, avatar hash included. `suggest` then reads the
+captured profiles and reports where one declares another — and, separately, the
+pairs implied by a chain of declarations. It proposes; a human disposes. Nothing
+is written into the labelled set without review, because a mislabelled pair is
+worse than a missing one: it teaches the calibration the wrong thing and every
+measurement downstream inherits it.
+
+The tool's first version got this wrong in an instructive way. It treated any
+shared URL as a declaration, and promptly matched two Automattic employees
+through `wordpress.com`. A shared employer is a link both profiles publish and
+neither one asserts, so a declaration now has to point at the other profile
+itself.
+
+Negative pairs cannot be discovered this way — nobody publishes a list of
+people they are not — so they are chosen by hand, and the useful ones are
+hard: `github:ben` (Ben Straub, Portland) against `devto:ben` (Ben Halpern, New
+York); `github:hikaru` (Hikaru Maeshiro) against `chess:hikaru` (the
+grandmaster Hikaru Nakamura), where the stranger really is a chess player.
+
+Profiles live in `backend/calibration/profiles.json` and the labelled pairs
+reference them by key, so one profile can appear in many pairs without being
+copied into each. The regression tests in `backend/tests/test_calibration.py`
+hold the floor.
 
 ---
 
@@ -1052,8 +1115,9 @@ possible later without a migration.
 ```bash
 cd backend
 source .venv/bin/activate
-pytest              # 495 tests
-ruff check .        # lint
+./scripts/scratch-neo4j.sh start                  # a throwaway database
+NEO4J_TEST_URI=bolt://localhost:7688 pytest       # 508 tests
+ruff check .                                      # lint
 ```
 
 ```bash
@@ -1076,11 +1140,41 @@ No test touches the network. The persistence and API tests need Neo4j and are
 pure-logic tests still run for a contributor without a database:
 
 ```bash
-NEO4J_TEST_URI=bolt://localhost:7687 NEO4J_TEST_PASSWORD=… pytest
+NEO4J_TEST_URI=bolt://localhost:7688 NEO4J_TEST_PASSWORD=… pytest
 ```
 
-The database those point at is **wiped** at the start of the session, so aim
-them at a scratch instance, never at real investigation data.
+### Why the suite needs its own database
+
+The database those point at is **wiped** at the start of the session — the
+persistence tests start from an empty graph, so the first thing they do is
+`MATCH (n) DETACH DELETE n`.
+
+Neo4j Community serves exactly one database per instance, so with
+`NEO4J_TEST_URI` unset the tests fall through to the application's own
+connection settings and land on precisely the graph the application is using.
+That destroyed real investigations several times during development, which is
+not a mistake worth relying on discipline to avoid. So the suite now refuses:
+
+```
+Refusing to wipe the database at bolt://localhost:7687 (database neo4j).
+
+It holds 1 investigation(s) and 137 node(s) that this suite did not create,
+and the first thing the suite does is `MATCH (n) DETACH DELETE n`.
+```
+
+An empty graph is always safe and runs without ceremony. A graph with data in
+it runs only when the caller has named a test target — `NEO4J_TEST_URI` or
+`NEO4J_TEST_DATABASE` — or set `OMNICIENT_TEST_WIPE_ANYWAY=1` to say the data
+is disposable.
+
+Two ways to get a scratch instance:
+
+```bash
+docker compose --profile test up -d neo4j-test    # if you run Neo4j in Docker
+./scripts/scratch-neo4j.sh start                  # if you run it from a tarball
+```
+
+Both listen on **7688** and hold nothing but test fixtures.
 
 ---
 

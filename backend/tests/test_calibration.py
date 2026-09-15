@@ -13,6 +13,20 @@ import pytest
 from app.calibration import DATASET, Report, evaluate, load_pairs
 
 
+def _inferable(report: Report) -> Report:
+    """The report without the pairs no model could recover blind.
+
+    See :meth:`Report.uninferable`. Kept as a helper rather than folded into
+    ``evaluate`` so that the headline run still reports the honest overall
+    number and says how many pairs this removes.
+    """
+    dropped = {id(o) for o in report.uninferable()}
+    return Report(
+        outcomes=[o for o in report.outcomes if id(o) not in dropped],
+        blind=report.blind,
+    )
+
+
 @pytest.fixture(scope="module")
 def pairs():
     if not DATASET.exists():
@@ -60,7 +74,7 @@ def test_the_model_can_infer_a_link_it_was_not_told(pairs) -> None:
     matching name, a reused photograph, a shared employer and a similar
     biography, can it recover a connection we independently know is there?
     """
-    report = evaluate(pairs, blind=True)
+    report = _inferable(evaluate(pairs, blind=True))
     same, different = report.separation()
 
     assert same > 25, f"inferred score on known-same pairs is only {same:.1f}"
@@ -69,12 +83,39 @@ def test_the_model_can_infer_a_link_it_was_not_told(pairs) -> None:
 
 def test_a_usable_threshold_exists(pairs) -> None:
     """Some cut-off has to be worth using, or the score means nothing."""
-    report = evaluate(pairs, blind=True)
+    report = _inferable(evaluate(pairs, blind=True))
     best = max(
         (report.at_threshold(t) for t in range(5, 80, 5)), key=lambda m: m["f1"]
     )
 
     assert best["f1"] >= 0.80, f"best F1 is only {best['f1']:.2f}"
+
+
+def test_the_uninferable_pairs_are_exactly_the_website_ones(pairs) -> None:
+    """The exclusion above has to keep meaning what it says.
+
+    ``_inferable`` drops known-same pairs that the blind pass leaves with no
+    evidence whatsoever, which is a fair exclusion for one specific reason:
+    those pairs tie an account to its owner's personal website, and a website
+    has no username, avatar or display name to compare. The declaration is not
+    merely the best evidence for them, it is the only evidence that could
+    exist, so counting them as inference failures measures the dataset rather
+    than the model.
+
+    That reasoning holds only while the exclusion stays that narrow. If a pair
+    of *accounts* ever lands in it, the model has stopped observing something
+    it should, and the blind measurement would quietly get easier instead of
+    the fault being noticed - so this fails rather than lets that pass.
+    """
+    dropped = evaluate(pairs, blind=True).uninferable()
+
+    assert dropped, "expected the account-to-website pairs to be here"
+    for outcome in dropped:
+        assert "website:" in outcome.pair.name, (
+            f"{outcome.pair.name} has no evidence once the declaration is "
+            "dropped, and it is not an account-to-website pair - the model is "
+            "observing less than it used to"
+        )
 
 
 def test_high_scores_are_not_wrong(pairs) -> None:
