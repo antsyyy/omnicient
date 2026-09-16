@@ -39,6 +39,62 @@ def test_a_bare_handle_is_a_username(value: str, expected: str) -> None:
     assert detected.seed_platform == "username"
 
 
+@pytest.mark.parametrize(
+    "value,expected",
+    [
+        ("_username", "_username"),
+        ("_alice", "_alice"),
+        ("__alice", "__alice"),
+        ("_alice_98", "_alice_98"),
+        ("_Alice_98", "_alice_98"),
+        ("@_alice", "_alice"),
+    ],
+)
+def test_a_leading_underscore_is_part_of_the_handle(
+    value: str, expected: str
+) -> None:
+    """"_alice" is an ordinary handle on Instagram, X and TikTok.
+
+    Requiring an alphanumeric first character rejected every one of them, and
+    stripping the underscore silently queried a different account.
+    """
+    detected = detect(value)
+    assert detected.type is IdentifierType.USERNAME
+    assert detected.identifier == expected
+
+
+def test_a_trailing_underscore_is_kept_too() -> None:
+    assert detect("alice_").identifier == "alice_"
+
+
+@pytest.mark.parametrize(
+    "value",
+    ["firstname.lastname", "john.smith", "alice.b.cooper", "mary.jane.watson"],
+)
+def test_a_dotted_name_is_a_username_not_a_domain(value: str) -> None:
+    """".lastname" is not a TLD, so this is a handle, not a site.
+
+    Reading it as a domain sent the crawler looking for a website that does
+    not exist and lost the account that does.
+    """
+    detected = detect(value)
+    assert detected.type is IdentifierType.USERNAME
+    assert detected.identifier == value.lower()
+    assert detected.platform is None
+
+
+@pytest.mark.parametrize(
+    "value",
+    ["alice.dev", "example.com", "example.co.uk", "sub.example.com", "alice.io"],
+)
+def test_a_real_tld_is_still_a_domain(value: str) -> None:
+    """The fix must not cost us actual domains."""
+    assert detect(value).type in (
+        IdentifierType.DOMAIN,
+        IdentifierType.WEBSITE_URL,
+    )
+
+
 def test_the_raw_input_is_preserved() -> None:
     """Normalization must never destroy what the analyst actually typed."""
     detected = detect("  @Alice_98 ")

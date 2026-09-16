@@ -13,21 +13,25 @@ the same person is the correlation engine's job.
 
 from __future__ import annotations
 
+import asyncio
 from collections import deque
+from collections.abc import Awaitable, Callable
 from dataclasses import dataclass, field
 from typing import Any
 
 from ..config import Settings, get_settings
 from ..models.enums import DiscoveryMethod, EntityType, EvidenceType, RelationshipType
 from ..sources import SourceRegistry
-from ..sources.base import FailureReason, ObservedProfile
+from ..sources.base import FailureReason, LookupResult, ObservedProfile
 from ..utils.logging import get_logger, log_event
+from ..utils.normalization import identity_key
 from .discovery import (
     Candidate,
     EntityKey,
     candidates_from_profile,
     discover_sources,
     email_domain_candidate,
+    fanout_candidates,
     seed_candidate,
     similarity_candidates,
 )
@@ -129,8 +133,17 @@ class Crawler:
         max_depth: int | None = None,
         max_pages: int | None = None,
         include_similarity: bool = True,
+        on_level: Callable[[CrawlOutcome], Awaitable[None]] | None = None,
     ) -> CrawlOutcome:
-        """Walk outward from a seed identifier and return what was observed."""
+        """Walk outward from a seed identifier and return what was observed.
+
+        ``on_level`` is awaited after each breadth-first level is folded in,
+        with the outcome so far. A crawl across two dozen sources takes long
+        enough that an analyst should not be watching a spinner while the
+        accounts are already known - this is what lets them be shown as they
+        are found. It runs at a level boundary rather than per source so the
+        partial results are still in deterministic candidate order.
+        """
         max_depth = self.settings.max_depth if max_depth is None else max_depth
         max_pages = self.settings.max_pages if max_pages is None else max_pages
 
@@ -146,6 +159,10 @@ class Crawler:
 
         queue: deque[Candidate] = deque()
         queued: set[EntityKey] = {seed.key}
+        # Handles already asked of every source, so a second sighting of one
+        # does not re-run the whole catalogue.
+        fanned_out: set[str] = {identity_key(seed.identifier)}
+        fanout_budget = max(0, self.settings.max_fanout_handles)
 
         if seed.platform == "username":
             # No platform was specified, so the seed is the handle itself and
@@ -172,9 +189,18 @@ class Crawler:
         else:
             queue.append(seed)
 
-        while queue:
-            candidate = queue.popleft()
+        # Breadth-first, one level at a time. Every candidate in a level is
+        # fetched concurrently - a fan-out across twenty different hosts has
+        # no reason to be sequential - but the results are then folded into
+        # the outcome in candidate order, so the entities, links and timeline
+        # a run produces do not depend on which host answered first.
+        semaphore = asyncio.Semaphore(max(1, self.settings.crawl_concurrency))
 
+        async def fetch(candidate: Candidate) -> LookupResult | None:
+            async with semaphore:
+                return await self._fetch(candidate)
+
+        while queue:
             if outcome.pages_fetched >= max_pages:
                 self._record(
                     outcome,
@@ -185,36 +211,111 @@ class Crawler:
                 )
                 break
 
-            entity, profile = await self._visit(candidate, outcome)
-            if entity is None:
-                continue
+            # Take the whole level, capped by whatever budget remains.
+            remaining = max_pages - outcome.pages_fetched
+            level = [queue.popleft() for _ in range(min(len(queue), remaining))]
+            if not level:
+                break
 
-            if profile is None or candidate.depth >= max_depth:
-                continue
-
-            derived = candidates_from_profile(
-                profile,
-                parent_key=entity.key,
-                depth=candidate.depth + 1,
-                from_seed=entity.is_seed,
+            results = await asyncio.gather(
+                *(fetch(candidate) for candidate in level), return_exceptions=True
             )
-            if include_similarity and candidate.seed_equivalent:
-                derived.extend(
-                    similarity_candidates(
-                        profile,
-                        depth=candidate.depth + 1,
-                        platforms=self._similarity_platforms(),
-                        known=set(queued),
-                    )
-                )
 
-            for next_candidate in derived:
-                if next_candidate.key in queued:
-                    # Already known: still record the link that was observed.
-                    self._link(outcome, next_candidate)
+            for candidate, result in zip(level, results, strict=True):
+                if isinstance(result, BaseException):
+                    # One source failing is never allowed to end a crawl.
+                    logger.warning(
+                        "lookup_failed platform=%s identifier=%s error=%s",
+                        candidate.platform,
+                        candidate.identifier,
+                        result,
+                    )
+                    self._record(
+                        outcome,
+                        "source_unavailable",
+                        f"{candidate.label} could not be read: {result}",
+                        level="WARNING",
+                        platform=candidate.platform,
+                        identifier=candidate.identifier,
+                        reason="NETWORK_ERROR",
+                    )
                     continue
-                queued.add(next_candidate.key)
-                queue.append(next_candidate)
+
+                entity, profile = self._integrate(candidate, result, outcome)
+                if entity is None or profile is None:
+                    continue
+                if candidate.depth >= max_depth:
+                    continue
+
+                derived = candidates_from_profile(
+                    profile,
+                    parent_key=entity.key,
+                    depth=candidate.depth + 1,
+                    from_seed=entity.is_seed,
+                )
+                if include_similarity and candidate.seed_equivalent:
+                    derived.extend(
+                        similarity_candidates(
+                            profile,
+                            depth=candidate.depth + 1,
+                            platforms=self._similarity_platforms(),
+                            known=set(queued),
+                        )
+                    )
+
+                # A profile that links to an account under a *different*
+                # handle has handed the investigation a new identity to
+                # search. Following it only on the platform that named it
+                # would waste the strongest lead there is - the person
+                # published the connection themselves.
+                for reference in profile.references:
+                    if fanout_budget <= 0:
+                        break
+                    handle = identity_key(reference.identifier)
+                    if not handle or handle in fanned_out:
+                        continue
+                    if not reference.explicit:
+                        # Only self-published links. Fanning out on a guess
+                        # would multiply guesses.
+                        continue
+                    fanned_out.add(handle)
+                    fanout_budget -= 1
+                    derived.extend(
+                        fanout_candidates(
+                            reference.identifier,
+                            platforms=self.registry.platforms(),
+                            depth=candidate.depth + 1,
+                            discovered_on=candidate.label,
+                            source_platform=reference.platform,
+                        )
+                    )
+                    self._record(
+                        outcome,
+                        "handle_discovered",
+                        (
+                            f"{candidate.label} links to '{reference.identifier}' "
+                            f"on {reference.platform}, a different handle - "
+                            f"searching every source for it"
+                        ),
+                        platform=reference.platform,
+                        identifier=reference.identifier,
+                        discovered_on=candidate.platform,
+                    )
+
+                for next_candidate in derived:
+                    if next_candidate.key in queued:
+                        # Already known: still record the link observed.
+                        self._link(outcome, next_candidate)
+                        continue
+                    queued.add(next_candidate.key)
+                    queue.append(next_candidate)
+
+            # Hand over what this level found before starting the next one.
+            if on_level is not None:
+                try:
+                    await on_level(outcome)
+                except Exception:  # noqa: BLE001 - reporting must not end a crawl
+                    logger.warning("progress_callback_failed", exc_info=True)
 
         self._attach_email_domains(outcome)
         self._record(
@@ -233,13 +334,31 @@ class Crawler:
 
     # -- one candidate -----------------------------------------------------
 
-    async def _visit(
-        self, candidate: Candidate, outcome: CrawlOutcome
-    ) -> tuple[ObservedEntity | None, ObservedProfile | None]:
-        """Look a candidate up and record whatever came back."""
-        adapter = self.registry.get(candidate.platform)
+    async def _fetch(self, candidate: Candidate) -> LookupResult | None:
+        """Look one candidate up. Network only - nothing is recorded here.
 
+        Kept free of side effects so a whole crawl level can run concurrently
+        without the order sources answer in leaking into the results. Returns
+        ``None`` when no adapter is registered for the platform.
+        """
+        adapter = self.registry.get(candidate.platform)
         if adapter is None:
+            return None
+        return await adapter.lookup(candidate.identifier)
+
+    def _integrate(
+        self,
+        candidate: Candidate,
+        result: LookupResult | None,
+        outcome: CrawlOutcome,
+    ) -> tuple[ObservedEntity | None, ObservedProfile | None]:
+        """Fold one lookup into the outcome.
+
+        Called sequentially in candidate order, so entities, links and the
+        timeline come out the same way on every run regardless of which host
+        happened to answer first.
+        """
+        if result is None:
             # Discovery is allowed to outrun adapter coverage: the account is
             # recorded as an unresolved candidate node (section 14).
             if candidate.drop_if_unresolved:
@@ -257,7 +376,6 @@ class Crawler:
             self._link(outcome, candidate)
             return entity, None
 
-        result = await adapter.lookup(candidate.identifier)
         outcome.pages_fetched += result.pages_fetched
 
         if not result.ok:
@@ -275,7 +393,9 @@ class Crawler:
                 "source_unavailable",
                 f"{candidate.label} could not be read: {result.detail}",
                 level="WARNING" if result.reason != FailureReason.NOT_FOUND else "INFO",
-                platform=candidate.platform, reason=str(result.reason),
+                platform=candidate.platform,
+                identifier=candidate.identifier,
+                reason=str(result.reason),
             )
             if candidate.drop_if_unresolved:
                 return None, None

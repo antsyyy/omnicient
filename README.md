@@ -34,8 +34,10 @@ observation contributed, and the contradictions that argue against them.
 - [Demo mode](#demo-mode)
 - [API documentation](#api-documentation)
 - [Identifier detection](#identifier-detection)
+- [Investigation canvas](#investigation-canvas)
 - [Analysis layer](#analysis-layer)
 - [Correlation methodology](#correlation-methodology)
+  - [Calibration](#calibration)
 - [Confidence scoring](#confidence-scoring)
 - [Crawler behaviour and limitations](#crawler-behaviour-and-limitations)
 - [Security protections](#security-protections)
@@ -236,9 +238,16 @@ for inspecting an investigation graph directly in Cypher.
 cd backend
 python -m venv .venv
 source .venv/bin/activate          # Windows: .venv\Scripts\activate
-pip install -r requirements.txt
-cp .env.example .env               # then set NEO4J_PASSWORD
+pip install -r requirements-dev.txt   # runtime deps + pytest and ruff
+cp .env.example .env                 # then set NEO4J_PASSWORD
 ```
+
+`requirements.txt` holds the runtime dependencies alone, pinned exactly, and
+is what the Docker image installs; `requirements-dev.txt` pulls those in and
+adds the test tooling. The pins are deliberate — the constraints used to be
+`>=`, so an image rebuilt a month later resolved whatever was newest that day
+and could have taken a major version without a line of this project changing.
+To move a pin: bump it, run the suite, commit the new version with the result.
 
 `NEO4J_PASSWORD` is the only value without a working default — no password is
 hardcoded anywhere in the repository.
@@ -308,7 +317,8 @@ All are optional except `NEO4J_PASSWORD`; see `backend/.env.example`.
 | `NEO4J_STARTUP_TIMEOUT`             | `30`                         | Seconds to wait for Neo4j at boot                      |
 | `OMNICIENT_DEMO_MODE`               | `true`                       | Use the offline synthetic dataset                      |
 | `OMNICIENT_MAX_DEPTH`               | `2`                          | Maximum crawl depth from the seed                      |
-| `OMNICIENT_MAX_PAGES`               | `50`                         | Page budget for one investigation                      |
+| `OMNICIENT_MAX_PAGES`               | `150`                        | Page budget for one investigation                      |
+| `OMNICIENT_CRAWL_CONCURRENCY`       | `10`                         | Sources fetched at once within a crawl level           |
 | `OMNICIENT_REQUEST_TIMEOUT`         | `10`                         | Per-request timeout, seconds                           |
 | `OMNICIENT_REQUEST_DELAY`           | `1.0`                        | Minimum delay between requests to one host             |
 | `OMNICIENT_MAX_RESPONSE_BYTES`      | `2000000`                    | Response size limit                                    |
@@ -432,6 +442,156 @@ a website, never as an account.
 
 ---
 
+## Investigation canvas
+
+The graph is not a network diagram. Forty entities drawn as forty circles is
+a topology picture that tells an analyst nothing at a glance, so the canvas
+regroups the same data into an investigation board:
+
+```
+                    ┌──────────────────┐
+                    │ SOCIAL ACCOUNTS  │
+                    │ @alice_98    IG  │
+                    │ @alice_dev   TH  │
+                    └────────┬─────────┘
+                             │ potential same identity
+   ┌─────────────┐   ┌───────▼────────┐   ┌──────────────┐
+   │ EMAILS      │◄──│   @alice_98    │──►│ WEBSITES     │
+   │ alice@…     │   │   SEED ENTITY  │   │ alice.dev    │
+   └─────────────┘   └───────┬────────┘   └──────────────┘
+                             │
+                    ┌────────▼─────────┐
+                    │ ORGANIZATIONS    │
+                    └──────────────────┘
+```
+
+**The card is the unit of comprehension; the row is the unit of interaction.**
+Each row carries its own React Flow handle, so a relationship is drawn from
+the *entity* it concerns rather than from the box containing it — the curve
+between `@alice_98` and `alice.dev` lands on those two rows.
+
+`investigationToMindMap()` does the regrouping in the frontend. **Neo4j is
+untouched**: the backend returns the same entities, relationships and evidence
+it always did, and every row still carries its real entity id, so selection,
+evidence and the analyst workflow work against the true graph.
+
+### The stroke carries the claim
+
+This is where the product philosophy becomes visual. A confirmed association
+and an unreviewed inference must not look alike, or the graph quietly turns a
+guess into a fact. Two channels carry that, and each carries exactly one thing:
+
+**Colour is the confidence band**, and nothing else — the same scale as
+everywhere else in the interface, with rejected, contradicted and
+analyst-asserted edges taking their own hues.
+
+**Stroke is who stands behind the line:**
+
+| Treatment | Meaning |
+| --- | --- |
+| solid, heavier | an analyst reviewed the evidence and agreed, or drew the link themselves |
+| solid | read off a page — `LINKS_TO`, `REFERENCES` — where no inference is involved |
+| thin, dashed, faint | an inference the tool is proposing, not asserting |
+| dashed, red | contradicted, or rejected by an analyst |
+
+Confirming an association deliberately does **not** turn the edge green.
+`--color-confirmed` and `--color-band-high` are the same value, so a green edge
+would say "an analyst agreed" and "the engine scored this 50–74" in one stroke —
+collapsing the exact distinction this interface exists to preserve. Dashed to
+solid also survives greyscale, a screenshot and a colourblind reader, none of
+which green-on-green does.
+
+Proposals are drawn by default. The canvas is where an analyst reviews what the
+crawl found, and it cannot be that while the engine's output is hidden: the
+earlier confirm-to-connect behaviour drew **one edge out of sixty-one** on a
+real investigation, and put observed links behind the same gate — asking an
+analyst to confirm that a page contains a link the crawler read from it.
+`hide candidates` collapses the view back to what a person stands behind, which
+is the right picture to export or present from.
+
+The key on the canvas is split the same way — colour under *Confidence*,
+stroke under *Standing* — and it draws its samples as real SVG lines carrying
+the same dash constants the canvas uses, so it cannot drift out of step with
+what it describes. It collapses to a single row (the connection count stays
+visible), and the choice is remembered per browser: it is a key, not a
+control, and once an analyst has learned it they want the corner back.
+
+### Ruling an entity out
+
+A crawl that searches a handle finds everyone who uses it, and some of them
+are other people. The analyst can say so: **mark as different identity**
+records that an account belongs to a different party — a namesake, a reused
+handle, a coincidence the evidence happened to surface.
+
+This is the only identity claim the system stores, and it is stored as what it
+is: an analyst's assertion, with their reasoning, timestamped. The engine never
+sets it. It is separate from the confirm/reject verdict on a *relationship*,
+which rules on whether evidence supports an association between two entities;
+this rules on the entity itself.
+
+**It deletes nothing.** The account, its observations, its evidence and its
+relationships all survive, and the ruling can be undone — because the analyst
+may be wrong, and a later reviewer has to be able to see what was ruled out and
+why. On the canvas the card is muted, its border goes dashed red, the handle is
+struck through and the confidence band is replaced by `DIFFERENT IDENTITY`: a
+band describes how strongly the *engine* associated an entity, and once a
+person has said it is not the same party, that number answers a question nobody
+is asking. A filter row under **Your rulings** takes them off the canvas for
+anyone who wants them out of the way — it appears only once there is something
+in it.
+
+The seed cannot be ruled out. It is what the investigation is about rather than
+a finding in it, and ruling it out would leave an investigation of nobody with
+every other entity still hanging off it. The API returns 409 and the interface
+offers no control.
+
+The verdict survives a re-crawl. A re-run re-observes every entity it finds and
+overwrites the observed fields; if it overwrote this too, an analyst would have
+to rule out the same namesake after every run.
+
+### The layout is a tree
+
+An investigation is a rooted, shallow thing — a starting handle and what was
+found from it — and a tree says that directly. The seed sits at the top, each
+hop is a level below the one before, and every card hangs from the card it was
+reached through, so depth reads down the screen. Each node is centred over its
+children, which keeps a branch together as one shape.
+
+Levels are **hop distance from the seed, not crawl depth.** They usually agree,
+but a bare handle asks every source about itself at depth zero, so depth alone
+would put the seed shoulder to shoulder with the two dozen accounts it found.
+
+Spacing is set from the measured card, which renders about 185x109 — nearly
+twice as wide as it is tall. Spacing levels as generously as columns therefore
+looked wrong: the gutter came out at 171px down the screen against 55px
+across, so the tree read as three times airier vertically than horizontally
+for no reason anyone had checked. Both are about 60px now.
+
+The cost of a tree is width: a wide fan-out is a wide row. A crowded level is
+therefore stepped alternately up and down, which keeps labels apart and lets
+cards sit closer than a dead-straight row allows — and level baselines
+accumulate rather than multiply, so a stepped level does not eat the gap below
+it. Entities no relationship reaches are parked in a grid underneath the tree
+rather than hung off the root, since drawing them as children would assert a
+parentage that does not exist.
+
+Edges are routed straight, which suits a tree: a line runs from a parent down
+to a child and reads as one stroke. Labels appear on selection, on hover, and
+on relationships an analyst should not miss; labelling every edge produces a
+wall of text nobody reads.
+
+### Staying legible as it grows
+
+A category holding thirty entities becomes a 900px column that dominates the
+board and cannot be read anyway, so cards cap at ten rows with `+N more`, and
+rows past the cap anchor their edges to the card. Categories collapse to a
+header and a count.
+
+Layout is deterministic: the same investigation always produces the same
+board, so *reset layout* returns the analyst to the arrangement they knew.
+
+---
+
 ## Analysis layer
 
 Four services read the investigation graph without changing it. None of them
@@ -526,10 +686,9 @@ flowchart TD
     R --> S6["Same / similar username +10 / +5"]
     R --> S7["Same display name +5"]
     R --> S8["Shared organization +5"]
-    R --> N1["Contradictory website −20"]
-    R --> N2["Metadata conflict −20"]
-    R --> N3["Conflicting location −15"]
-    S1 & S2 & S3 & S4 & S5 & S6 & S7 & S8 & N1 & N2 & N3 --> SUM["Sum, clamped to 0–100"]
+    R --> N1["Metadata conflict −20"]
+    R --> N2["Conflicting location −15"]
+    S1 & S2 & S3 & S4 & S5 & S6 & S7 & S8 & N1 & N2 --> SUM["Sum, clamped to 0–100"]
     SUM --> BAND["Confidence band"]
     BAND --> TYPE["Relationship type"]
 ```
@@ -549,11 +708,130 @@ Design decisions worth knowing:
   existing.
 - **Weak signals are labelled weak.** Evidence text for username and display
   name matches says so explicitly, in the analyst's own words, not just numerically.
-- **Avatar matching compares normalized image URLs** in the MVP — it catches one
-  image reused across platforms, not a re-encoded copy. Perceptual hashing is
-  the obvious next step and slots into the same evidence type.
+- **Avatar matching compares perceptual hashes, not URLs.** Every platform
+  serves the same photograph from a different address — a signed Instagram CDN
+  URL, `avatars.githubusercontent.com/u/1234`, a hash of an email at Gravatar —
+  so URL comparison could only ever fire for two accounts on the *same* site,
+  which is not the case the rule exists for. Each avatar is reduced to a 64-bit
+  difference hash (`backend/app/utils/imagehash.py`) that survives the
+  rescaling and re-encoding an upload goes through, and two profiles match when
+  the hashes are within 14 bits. Flat images, addresses that name themselves a
+  default, and any picture carried by more than four accounts are all refused,
+  because a platform's placeholder would otherwise link every account that
+  never uploaded a photograph. This deliberately does **not** compare faces:
+  two different photographs of the same person will not match, and guessing at
+  that is a claim the evidence cannot support.
 
 All point values live in one place, `ScoringConfig` in `backend/app/config.py`.
+
+### Calibration
+
+Every weight above is a number somebody chose. `python -m app.calibration`
+turns that into a measurement: it scores 52 labelled pairs drawn from 45 real
+public profiles and reports how well the model separates the ones that belong
+together from the ones that do not.
+
+The labels come from the accounts themselves — a Gravatar's verified accounts,
+a Keybase proof, a website named on a profile — because a connection the owner
+published is the strongest ground truth public data offers. Which creates an
+obvious circularity: if the label comes from an explicit link and the model
+scores explicit links at seventy, the run mostly measures whether it can read a
+link it was handed. So the harness runs **twice**, and the second pass drops
+`EXPLICIT_LINK` entirely and asks whether the remaining signals could have
+recovered a connection we know is real. That blind number is the one worth
+quoting:
+
+```
+  WITHOUT the declared link (can the model infer it?)
+  22 pairs known same, 30 known different
+  mean score: 21.6 when same, 1.3 when different
+
+    evidence type              fires on same  on different
+    SAME_DISPLAY_NAME                    14             0
+    SAME_AVATAR                           7             0
+    SAME_WEBSITE                          7             1
+    SAME_USERNAME                         7             4
+    SIMILAR_BIO                           4             0
+    CONTRADICTORY_ATTRIBUTE               2             8
+```
+
+The most valuable pairs are the ones where **neither profile links to the
+other** — `github:simonw` and `bluesky:simonwillison.net`, or `github:ornicar`
+and `lichess:thibault`, whose handles share nothing at all. Both are tied
+together by a chain of declarations that passes through a third page, so the
+model cannot read the answer anywhere; it has to recover it from a name, a
+photograph, a biography. A dataset of directly declared pairs alone cannot test
+that, which is why `capture.py` reports implied pairs separately.
+
+That last column is the actionable one, and it found two real faults the first
+time it was read:
+
+- **The avatar threshold matched nothing.** It was set to 6 bits by guess. The
+  same photograph across platforms actually sits 7–12 bits apart, so the rule
+  written to catch re-encoded copies could not fire on a single true pair — the
+  very bug it existed to fix. Raised to 14, measured.
+- **The website contradiction was backwards.** "These profiles publish
+  different websites" fired on three known-same pairs and two known-different
+  ones — it was subtracting twenty points from the pairs it should have
+  supported. One person listing their blog on GitHub and their shop on
+  Instagram is ordinary, not a conflict. Removing it took F1 from 0.67 to 0.93.
+
+Both findings were invisible to the test suite, which could only confirm that
+the rules did what they were written to do, not whether what they were written
+to do was right.
+
+**Two things the run is careful to be honest about.**
+
+Six known-same pairs score **zero** blind, and they are counted as misses in
+the headline number. Every one ties an account to its owner's personal
+website — which has no username, no avatar and no display name — so the
+declaration was not merely the best evidence available but the only evidence
+that could ever have existed. Excluding those, the account-to-account pairs
+average 29.7 against 1.3 for strangers. Both figures are printed, and a test
+(`test_the_uninferable_pairs_are_exactly_the_website_ones`) fails if that
+exclusion ever grows to cover a pair of *accounts*, which would mean the model
+had quietly stopped observing something.
+
+The one remaining false positive is worth naming rather than fixing by feel: an
+Automattic employee and the WordPress brand account score 20 for publishing the
+same website, `wordpress.com`. A shared *personal* domain is strong evidence and
+a shared *employer* domain is close to none, which is the same distinction the
+avatar rule already makes when it ignores a picture carried by many accounts.
+One counter-example is not enough to fit a rule to, so it is recorded here and
+left alone — tuning a weight against a single pair is what this harness exists
+to replace.
+
+### Extending the dataset
+
+```bash
+python -m calibration.capture fetch github:simonw bluesky:simonwillison.net
+python -m calibration.capture suggest
+```
+
+`fetch` runs the project's own adapters, so a captured profile is exactly what
+a crawl would have seen, avatar hash included. `suggest` then reads the
+captured profiles and reports where one declares another — and, separately, the
+pairs implied by a chain of declarations. It proposes; a human disposes. Nothing
+is written into the labelled set without review, because a mislabelled pair is
+worse than a missing one: it teaches the calibration the wrong thing and every
+measurement downstream inherits it.
+
+The tool's first version got this wrong in an instructive way. It treated any
+shared URL as a declaration, and promptly matched two Automattic employees
+through `wordpress.com`. A shared employer is a link both profiles publish and
+neither one asserts, so a declaration now has to point at the other profile
+itself.
+
+Negative pairs cannot be discovered this way — nobody publishes a list of
+people they are not — so they are chosen by hand, and the useful ones are
+hard: `github:ben` (Ben Straub, Portland) against `devto:ben` (Ben Halpern, New
+York); `github:hikaru` (Hikaru Maeshiro) against `chess:hikaru` (the
+grandmaster Hikaru Nakamura), where the stranger really is a chess player.
+
+Profiles live in `backend/calibration/profiles.json` and the labelled pairs
+reference them by key, so one profile can appear in many pairs without being
+copied into each. The regression tests in `backend/tests/test_calibration.py`
+hold the floor.
 
 ---
 
@@ -598,8 +876,15 @@ API and the export all say so.
 ## Crawler behaviour and limitations
 
 The crawler is breadth-first and bounded in every direction: depth
-(`MAX_DEPTH=2`), pages (`MAX_PAGES=50`), per-request timeout, response size,
-redirect hops, and a polite per-host delay. It follows only URLs discovered
+(`MAX_DEPTH=2`), pages (`MAX_PAGES=150`), per-request timeout, response size,
+redirect hops, and a polite per-host delay.
+
+Each level is fetched **concurrently** — a fan-out across two dozen different
+hosts has no reason to be sequential — and the results are then folded in
+*in candidate order*, so what a run produces never depends on which host
+answered first. Politeness is unaffected: the delay is held per host, so
+repeat requests to any single service are still spaced. Measured on a bare
+username against 23 live sources, this took a complete crawl from 93s to 23s. It follows only URLs discovered
 during the investigation, de-duplicates entities by `(type, platform,
 identifier)`, and honours `robots.txt` where it is available.
 
@@ -608,6 +893,22 @@ identifier)`, and honours `robots.txt` where it is available.
 Measured, not assumed — each platform's robots.txt was checked against
 Omnicient's user agent, and every permitted endpoint was then probed:
 
+**24 adapters across six categories**, every one checked against its
+robots.txt before it was written:
+
+| Category | Sources |
+| --- | --- |
+| **Developer** | GitHub, DEV, Hacker News, Hugging Face, Stack Overflow, crates.io, Docker Hub, Launchpad |
+| **Social** | Mastodon, Bluesky, Telegram, Medium (+ Instagram, Reddit, Threads, Facebook below) |
+| **Gaming** | Steam |
+| **Music** | SoundCloud, Last.fm |
+| **Learning** | Codewars, Scratch, Duolingo |
+| **Identity** | Keybase |
+| **Web** | any site, robots permitting |
+
+Adapters declare a `SourceCategory`, so `/api/health` reports coverage grouped
+rather than as a flat list of two dozen platform names.
+
 | Source | Live? | Endpoint |
 | --- | --- | --- |
 | GitHub | ✅ | `api.github.com/users/{u}` — documented, anonymous |
@@ -615,12 +916,26 @@ Omnicient's user agent, and every permitted endpoint was then probed:
 | Mastodon | ✅ | `/api/v1/accounts/lookup` on an allow-listed instance |
 | Bluesky | ✅ | `public.api.bsky.app` AT Protocol appview |
 | DEV | ✅ | `dev.to/api/users/by_username` |
+| Hacker News | ✅ | `hacker-news.firebaseio.com/v0/user/{u}.json` |
+| Hugging Face | ✅ | `huggingface.co/api/users/{u}/overview` |
+| Stack Overflow | ✅ | Stack Exchange API — searched by display name |
+| crates.io | ✅ | `crates.io/api/v1/users/{u}` — GitHub-backed |
+| Docker Hub | ✅ | `hub.docker.com/v2/users/{u}/` |
+| Launchpad | ✅ | `api.launchpad.net/1.0/~{u}` |
+| Steam | ✅ | `steamcommunity.com/id/{u}/?xml=1` |
+| SoundCloud / Last.fm | ✅ | Open Graph card on the profile page |
+| Codewars / Scratch / Duolingo | ✅ | documented public JSON |
+| Telegram / Medium | ✅ | Open Graph card |
 | Websites | ✅ | the page itself, robots permitting |
 | Instagram | robots off | `Disallow: /`, but the public profile parses |
 | Facebook | robots off | `Disallow: /`, but public pages parse |
 | Threads | robots off | `Disallow: /`, but the public profile parses |
 | Reddit | ❌ | `Disallow: /` — and HTTP 403 to non-browser clients |
-| GitLab, Codeberg, Gravatar, Lobsters | ❌ | `Disallow:` on the API path |
+| GitLab, Codeberg, Gitee, Gravatar, Lobsters | ❌ | `Disallow:` on the API path |
+| Speedrun, Chess.com, Lichess, HackerRank | ❌ | `Disallow:` — gaming and learning |
+| Genius, MusicBrainz, Mixcloud | ❌ | `Disallow:` — music |
+| Pinterest, Flickr, Patreon, Linktree | ❌ | `Disallow:` — social |
+| LeetCode, Exercism, NameMC | ❌ | HTTP 403 to non-browser clients |
 
 **"robots off"** means the source is reachable only when the operator sets
 `OMNICIENT_RESPECT_ROBOTS=false`. Nothing else changes: Omnicient still sends
@@ -786,24 +1101,32 @@ omnicient/
 │   │   ├── services/           crawler, discovery, correlation,
 │   │   │                       alias_detection, identity_profile, paths,
 │   │   │                       leads, graph, investigation (orchestration)
-│   │   ├── sources/            base + github, keybase, mastodon, bluesky,
-│   │   │                       devto, website, instagram, reddit, threads,
-│   │   │                       facebook
+│   │   ├── sources/            base + per-platform adapters (github,
+│   │   │                       keybase, mastodon, bluesky, devto, website,
+│   │   │                       instagram, reddit, threads, facebook) and
+│   │   │                       category modules (dev, gaming, music,
+│   │   │                       learning, social)
 │   │   └── utils/              identifier, normalization, url_parser,
 │   │                           validation, logging
 │   ├── tests/                  identifier, normalization, url_parser,
 │   │                           correlation, alias_detection,
 │   │                           identity_profile, paths, leads, graph,
 │   │                           sources, api
-│   ├── requirements.txt
+│   ├── requirements.txt        # runtime, pinned — what Docker installs
+│   ├── requirements-dev.txt    # the above plus pytest and ruff
 │   └── .env.example
 ├── frontend/
 │   ├── src/
-│   │   ├── components/         InvestigationGraph, EntityNode, EntityPanel,
+│   │   ├── components/         EntityPanel,
 │   │   │                       RelationshipPanel, EvidencePanel, Sidebar,
 │   │   │                       Filters, SearchBar, ActivityLog,
 │   │   │                       IdentityProfilePanel, LeadsPanel,
 │   │   │                       PathExplorer, InvestigationHeader
+│   │   ├── components/graph/   InvestigationCanvas, SeedNode,
+│   │   │                       CategoryGroupNode, CategoryItem,
+│   │   │                       RelationshipEdge, GraphToolbar,
+│   │   │                       GraphSearch, GraphLegend, ContextMenu
+│   │   │   └── layout/         mindMapLayout, radialLayout
 │   │   ├── pages/              Dashboard, Investigation
 │   │   ├── api/client.ts       Typed REST client
 │   │   ├── types/index.ts      The API contract in TypeScript
@@ -886,8 +1209,9 @@ possible later without a migration.
 ```bash
 cd backend
 source .venv/bin/activate
-pytest              # 269 tests
-ruff check .        # lint
+./scripts/scratch-neo4j.sh start                  # a throwaway database
+NEO4J_TEST_URI=bolt://localhost:7688 pytest       # 519 tests
+ruff check .                                      # lint
 ```
 
 ```bash
@@ -910,11 +1234,41 @@ No test touches the network. The persistence and API tests need Neo4j and are
 pure-logic tests still run for a contributor without a database:
 
 ```bash
-NEO4J_TEST_URI=bolt://localhost:7687 NEO4J_TEST_PASSWORD=… pytest
+NEO4J_TEST_URI=bolt://localhost:7688 NEO4J_TEST_PASSWORD=… pytest
 ```
 
-The database those point at is **wiped** at the start of the session, so aim
-them at a scratch instance, never at real investigation data.
+### Why the suite needs its own database
+
+The database those point at is **wiped** at the start of the session — the
+persistence tests start from an empty graph, so the first thing they do is
+`MATCH (n) DETACH DELETE n`.
+
+Neo4j Community serves exactly one database per instance, so with
+`NEO4J_TEST_URI` unset the tests fall through to the application's own
+connection settings and land on precisely the graph the application is using.
+That destroyed real investigations several times during development, which is
+not a mistake worth relying on discipline to avoid. So the suite now refuses:
+
+```
+Refusing to wipe the database at bolt://localhost:7687 (database neo4j).
+
+It holds 1 investigation(s) and 137 node(s) that this suite did not create,
+and the first thing the suite does is `MATCH (n) DETACH DELETE n`.
+```
+
+An empty graph is always safe and runs without ceremony. A graph with data in
+it runs only when the caller has named a test target — `NEO4J_TEST_URI` or
+`NEO4J_TEST_DATABASE` — or set `OMNICIENT_TEST_WIPE_ANYWAY=1` to say the data
+is disposable.
+
+Two ways to get a scratch instance:
+
+```bash
+docker compose --profile test up -d neo4j-test    # if you run Neo4j in Docker
+./scripts/scratch-neo4j.sh start                  # if you run it from a tarball
+```
+
+Both listen on **7688** and hold nothing but test fixtures.
 
 ---
 

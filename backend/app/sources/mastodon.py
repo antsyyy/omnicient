@@ -64,6 +64,7 @@ class MastodonAdapter(JsonProfileAdapter):
     name = "Mastodon"
     api_template = "https://{instance}/api/v1/accounts/lookup?acct={handle}"
     url_template = "https://{instance}/@{handle}"
+    probe_present = "Gargron"
 
     @staticmethod
     def _split(identifier: str) -> tuple[str, str]:

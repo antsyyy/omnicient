@@ -10,6 +10,7 @@ from ..models.enums import (
     RELATIONSHIP_LABELS,
     AnalystStatus,
     ConfidenceLevel,
+    RelationshipOrigin,
     RelationshipType,
 )
 from .entity import EntitySummary
@@ -28,6 +29,7 @@ class RelationshipRead(BaseModel):
     relationship_type: RelationshipType
     confidence_score: float
     confidence_level: ConfidenceLevel
+    origin: RelationshipOrigin = RelationshipOrigin.ENGINE
     analyst_status: AnalystStatus
     analyst_note: str | None = None
     #: When the analyst last recorded a verdict (section 25).
@@ -47,6 +49,16 @@ class RelationshipRead(BaseModel):
     @property
     def evidence_count(self) -> int:
         return len(self.evidence_ids)
+
+    @computed_field  # type: ignore[prop-decorator]
+    @property
+    def analyst_asserted(self) -> bool:
+        """Whether a person drew this link rather than the engine deriving it.
+
+        The interface must never present the two identically: one rests on
+        observed evidence, the other on a person's judgement.
+        """
+        return self.origin is RelationshipOrigin.ANALYST
 
 
 class RelationshipDetail(RelationshipRead):
@@ -73,4 +85,38 @@ class AnalystDecision(BaseModel):
         default=None,
         max_length=2000,
         description="Optional analyst rationale stored with the decision.",
+    )
+
+
+#: Relationship types an analyst may draw by hand.
+#:
+#: Deliberately narrow.  The excluded types each name a specific observation
+#: the engine made - a shared avatar, a shared email, a contradiction - and
+#: letting someone draw one by hand would assert an observation that was never
+#: made.  What an analyst *can* express is the judgement itself: that two
+#: things are plausibly the same identity, a naming variant, or connected.
+ANALYST_LINKABLE_TYPES: tuple[RelationshipType, ...] = (
+    RelationshipType.POTENTIAL_SAME_IDENTITY,
+    RelationshipType.POTENTIAL_ALIAS,
+    RelationshipType.LINKS_TO,
+    RelationshipType.REFERENCES,
+)
+
+
+class ManualLinkCreate(BaseModel):
+    """Body of a request to draw a link by hand.
+
+    The rationale is required, not optional.  An analyst-asserted edge has no
+    observed evidence behind it - the reason the analyst gives *is* its
+    provenance, and an investigation that cannot say why a link was drawn is
+    not one anybody should have to trust.
+    """
+
+    source_entity_id: str
+    target_entity_id: str
+    relationship_type: RelationshipType = RelationshipType.POTENTIAL_SAME_IDENTITY
+    rationale: str = Field(
+        min_length=3,
+        max_length=2000,
+        description="Why the analyst believes these two entities are connected.",
     )

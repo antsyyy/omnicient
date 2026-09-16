@@ -17,7 +17,7 @@ from datetime import datetime
 from typing import Any
 
 from .base import as_datetime, new_id, utcnow
-from .enums import DiscoveryMethod, EntityType
+from .enums import DiscoveryMethod, EntityType, EntityVerdict
 
 #: Neo4j label carried by every entity node, whatever its type.
 ENTITY_LABEL = "Entity"
@@ -70,6 +70,12 @@ class Entity:
     is_seed: bool = False
     resolved: bool = False
 
+    #: An analyst's ruling that this entity is somebody else. Never set by
+    #: the engine, and it removes nothing - see :class:`EntityVerdict`.
+    analyst_verdict: str = EntityVerdict.UNREVIEWED
+    analyst_note: str | None = None
+    reviewed_at: datetime | None = None
+
     first_seen: datetime = field(default_factory=utcnow)
     last_seen: datetime = field(default_factory=utcnow)
     created_at: datetime = field(default_factory=utcnow)
@@ -115,6 +121,9 @@ class Entity:
             depth=int(data.get("depth", 0)),
             is_seed=bool(data.get("is_seed", False)),
             resolved=bool(data.get("resolved", False)),
+            analyst_verdict=data.get("analyst_verdict") or EntityVerdict.UNREVIEWED,
+            analyst_note=data.get("analyst_note"),
+            reviewed_at=as_datetime(data.get("reviewed_at")),
             first_seen=as_datetime(data.get("first_seen")) or utcnow(),
             last_seen=as_datetime(data.get("last_seen")) or utcnow(),
             created_at=as_datetime(data.get("created_at")) or utcnow(),

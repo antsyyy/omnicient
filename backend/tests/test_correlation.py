@@ -96,9 +96,18 @@ def test_similar_biography_and_display_name(engine: CorrelationEngine) -> None:
     assert {EvidenceType.SIMILAR_BIO, EvidenceType.SAME_DISPLAY_NAME} <= types_of(result)
 
 
-def test_contradictory_website_and_location_reduce_the_score(
+def test_a_conflicting_location_reduces_the_score(
     engine: CorrelationEngine,
 ) -> None:
+    """A stated place that disagrees is evidence against the association.
+
+    Publishing *different websites* used to count against a pair as well, and
+    no longer does. Measured against the labelled calibration pairs that rule
+    fired on three known-same pairs and two known-different ones - it was
+    taking twenty points off the pairs it was supposed to support, because one
+    person listing their blog on GitHub and their shop on Instagram is
+    ordinary rather than contradictory. Removing it took F1 from 0.67 to 0.93.
+    """
     source = profile(
         "instagram", "alice_98",
         location="Kathmandu",
@@ -112,11 +121,22 @@ def test_contradictory_website_and_location_reduce_the_score(
     result = engine.compare(source, target)
 
     contradictions = result.contradicting
-    assert len(contradictions) == 2
+    assert len(contradictions) == 1
+    assert "location" in contradictions[0].description.lower()
     assert all(item.weight < 0 for item in contradictions)
-    # A weak username match cannot survive two contradictions.
+    # A weak username match cannot survive it.
     assert result.score == 0
     assert result.relationship_type == RelationshipType.CONTRADICTORY
+
+
+def test_different_websites_alone_are_not_a_contradiction(
+    engine: CorrelationEngine,
+) -> None:
+    """Two links are not a conflict. People publish more than one site."""
+    source = profile("instagram", "alice_98", external_links=["https://alice.dev"])
+    target = profile("x", "alice_98", external_links=["https://alice.shop"])
+
+    assert engine.compare(source, target).contradicting == []
 
 
 def test_contradictions_only_weaken_a_strong_relationship(
@@ -215,7 +235,10 @@ def test_demo_dataset_produces_the_documented_scenario() -> None:
         if {result.source_key[1], result.target_key[1]} == {"instagram", "x"}
     )
     assert contradictory.relationship_type == RelationshipType.CONTRADICTORY
-    assert len(contradictory.contradicting) == 2
+    # One, not two: the demo impostor differs in stated location and in the
+    # website she publishes, and only the first of those counts against her
+    # now. See test_a_conflicting_location_reduces_the_score.
+    assert len(contradictory.contradicting) == 1
 
 
 def test_a_shared_link_shortener_is_not_a_shared_website() -> None:
@@ -243,3 +266,94 @@ def test_a_shared_personal_domain_is_still_strong_evidence() -> None:
     assert result is not None
     types = {item.type for item in result.evidence}
     assert EvidenceType.SAME_WEBSITE in types
+
+
+# ---------------------------------------------------------------------------
+# The avatar rule, which until now could not fire across platforms
+# ---------------------------------------------------------------------------
+
+
+def _profile(platform: str, identifier: str, **fields):
+    from app.sources.base import ObservedProfile
+
+    return ObservedProfile(
+        platform=platform,
+        identifier=identifier,
+        name=f"@{identifier}",
+        url=f"https://{platform}.com/{identifier}",
+        **fields,
+    )
+
+
+def _avatar_evidence(source, target):
+    from app.config import ScoringConfig
+    from app.services.correlation import CorrelationEngine
+
+    return [
+        item
+        for item in CorrelationEngine(ScoringConfig()).compare(source, target).evidence
+        if item.type == "SAME_AVATAR"
+    ]
+
+
+def test_the_same_photograph_matches_across_two_platforms() -> None:
+    """The case the rule exists for, and the one it could never reach.
+
+    Two sites serve the same picture from completely different addresses, so
+    comparing URLs found nothing. The hashes differ by two bits because each
+    platform re-encoded it.
+    """
+    source = _profile(
+        "instagram",
+        "beaulebens",
+        avatar_url="https://scontent.cdninstagram.com/v/t51.signed",
+        avatar_hash="d3633918984c67a6",
+    )
+    target = _profile(
+        "facebook",
+        "beaulebens",
+        avatar_url="https://scontent.xx.fbcdn.net/v/t1.other",
+        avatar_hash="d3633918984c67a4",
+    )
+
+    found = _avatar_evidence(source, target)
+    assert found, "different addresses, same picture"
+    assert "bits differ" in found[0].description
+
+
+def test_different_pictures_do_not_match() -> None:
+    source = _profile("instagram", "a", avatar_url="https://a/x", avatar_hash="d3633918984c67a6")
+    target = _profile("facebook", "b", avatar_url="https://b/y", avatar_hash="29313a9b894ca662")
+
+    assert _avatar_evidence(source, target) == []
+
+
+def test_a_shared_placeholder_is_not_evidence() -> None:
+    """Two accounts that both have *no* picture are served the same address.
+
+    A real crawl scored twenty-five points for exactly this, linking two
+    unrelated Duolingo accounts because neither had uploaded a photograph.
+    """
+    url = "https://simg-ssl.duolingo.com/avatar/default_2"
+    source = _profile("duolingo", "one", avatar_url=url, avatar_hash="aaaaaaaaaaaaaaaa")
+    target = _profile("duolingo", "two", avatar_url=url, avatar_hash="aaaaaaaaaaaaaaaa")
+
+    assert _avatar_evidence(source, target) == []
+
+
+def test_the_same_address_still_counts() -> None:
+    """A real picture served from one address to two profiles."""
+    url = "https://cdn.example.com/photos/beau.jpg"
+    source = _profile("devto", "a", avatar_url=url)
+    target = _profile("medium", "b", avatar_url=url)
+
+    found = _avatar_evidence(source, target)
+    assert found
+    assert "same address" in found[0].description
+
+
+def test_a_profile_with_no_hash_and_no_shared_address_is_not_a_match() -> None:
+    source = _profile("instagram", "a", avatar_url="https://a/x")
+    target = _profile("facebook", "b", avatar_url="https://b/y")
+
+    assert _avatar_evidence(source, target) == []

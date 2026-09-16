@@ -154,3 +154,114 @@ async def test_analyst_decision_is_preserved_across_recrawl(repo, investigation)
     assert refreshed.analyst_status == "CONFIRMED"
     assert refreshed.analyst_note == "Checked the evidence."
     assert refreshed.reviewed_at is not None
+
+
+# ---------------------------------------------------------------------------
+# Layout
+# ---------------------------------------------------------------------------
+
+
+async def test_the_seed_sits_at_the_top(repo) -> None:
+    """An investigation hangs from the thing it started with."""
+    from app.schemas.investigation import InvestigationCreate
+    from app.services.graph import GraphService
+    from app.services.investigation import InvestigationService
+
+    service = InvestigationService(repo)
+    created = service.create(
+        InvestigationCreate(identifier="alice_98", platform="instagram", demo=True)
+    )
+    await service.run(created)
+
+    graph = GraphService(repo).build(created)
+    seed = next(node for node in graph.nodes if node.is_seed)
+
+    assert (seed.position.x, seed.position.y) == (0.0, 0.0)
+
+
+async def test_the_tree_grows_downward_from_the_seed(repo) -> None:
+    """Hop distance reads down the screen, and only downward.
+
+    The layout is a tree now rather than a ring, so the property worth
+    holding is the one a tree promises: everything reached from the seed is
+    below it, and a card is below the card it was reached through. A row that
+    drifts upward would say the crawl went the other way.
+    """
+    from app.schemas.investigation import InvestigationCreate
+    from app.services.graph import GraphService
+    from app.services.investigation import InvestigationService
+
+    service = InvestigationService(repo)
+    created = service.create(
+        InvestigationCreate(identifier="alice_98", platform="instagram", demo=True)
+    )
+    await service.run(created)
+
+    graph = GraphService(repo).build(created)
+    seed = next(node for node in graph.nodes if node.is_seed)
+    by_id = {node.id: node for node in graph.nodes}
+
+    assert all(node.position.y >= seed.position.y for node in graph.nodes)
+    assert max(node.position.y for node in graph.nodes) > seed.position.y
+
+    # Everything the seed touches hangs below it, strictly - the one
+    # parent-child relationship the payload states plainly enough to check.
+    kin = [
+        by_id[edge.target if edge.source == seed.id else edge.source]
+        for edge in graph.edges
+        if seed.id in (edge.source, edge.target)
+    ]
+    assert kin, "the seed should be connected to something"
+    for node in kin:
+        assert node.position.y > seed.position.y, (
+            f"{node.label} was reached from the seed but is drawn level with "
+            "it or above it"
+        )
+
+    # And a parent sits over its children rather than off to one side.
+    if len(kin) > 1:
+        xs = [node.position.x for node in kin]
+        assert min(xs) <= seed.position.x <= max(xs), (
+            "the seed is not centred over what it found"
+        )
+
+
+async def test_no_two_cards_overlap(repo) -> None:
+    """Cards are boxes, so the check has to be about boxes.
+
+    This measured straight-line distance against a single threshold, which
+    quietly assumed a square card. A node actually renders about 185x109 -
+    nearly twice as wide as it is tall - so one number was simultaneously too
+    slack horizontally and far too strict vertically, and the strict half was
+    holding the levels three times further apart than the columns for no
+    reason anyone had checked.
+    """
+    from app.schemas.investigation import InvestigationCreate
+    from app.services.graph import GraphService
+    from app.services.investigation import InvestigationService
+
+    # The measured card, rounded up, so the assertion has a little margin.
+    card_width, card_height = 200, 120
+
+    service = InvestigationService(repo)
+    created = service.create(
+        InvestigationCreate(identifier="alice_98", platform="instagram", demo=True)
+    )
+    await service.run(created)
+
+    graph = GraphService(repo).build(created)
+    points = [(node.id, node.position.x, node.position.y) for node in graph.nodes]
+    for index, (first, x1, y1) in enumerate(points):
+        for second, x2, y2 in points[index + 1 :]:
+            assert abs(x1 - x2) >= card_width or abs(y1 - y2) >= card_height, (
+                f"{first} and {second} overlap: "
+                f"{abs(x1 - x2):.0f}px apart across, {abs(y1 - y2):.0f}px down"
+            )
+
+
+def test_an_empty_investigation_lays_out_to_nothing() -> None:
+    import networkx as nx
+
+    from app.services.graph import GraphService
+
+    assert GraphService._layout(nx.Graph(), []) == {}

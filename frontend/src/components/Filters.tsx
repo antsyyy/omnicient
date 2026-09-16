@@ -1,20 +1,21 @@
-import type { ConfidenceLevel, EntityType, FilterState, RelationshipType } from '../types'
+import type { ConfidenceLevel, EntityType, FilterState } from '../types'
 import {
   CONFIDENCE_COLOR,
   CONFIDENCE_LABEL,
   CONFIDENCE_ORDER,
   ENTITY_LABEL,
   ENTITY_TYPES,
-  RELATIONSHIP_LABEL,
-  RELATIONSHIP_TYPES,
 } from '../lib/display'
 
 interface Props {
   filters: FilterState
   counts: {
     byEntityType: Record<string, number>
-    byRelationshipType: Record<string, number>
+    /** Entities per band, and how many nothing has associated yet. */
     byConfidence: Record<string, number>
+    unassociated: number
+    /** Entities an analyst has ruled a different party. */
+    differentIdentity: number
   }
   onChange: (next: FilterState) => void
 }
@@ -59,7 +60,15 @@ function Row({
   )
 }
 
-/** Filter panel: the graph updates as soon as anything here changes. */
+/**
+ * Filter panel: the graph updates as soon as anything here changes.
+ *
+ * Both filters narrow the *entities* on the canvas, which is what an analyst
+ * is actually looking at. The relationship-type and minimum-score controls
+ * that used to live here narrowed edges instead, and since the canvas only
+ * draws associations somebody has confirmed, they spent most of their life
+ * filtering lines that were already hidden.
+ */
 export default function Filters({ filters, counts, onChange }: Props) {
   return (
     <div className="space-y-4">
@@ -79,7 +88,7 @@ export default function Filters({ filters, counts, onChange }: Props) {
       </section>
 
       <section>
-        <div className="panel-title mb-1">Confidence</div>
+        <div className="panel-title mb-1">Strongest association</div>
         {CONFIDENCE_ORDER.map((level: ConfidenceLevel) => (
           <Row
             key={level}
@@ -95,50 +104,50 @@ export default function Filters({ filters, counts, onChange }: Props) {
             }
           />
         ))}
+        {/*
+          The seed, and anything found but not yet tied to anything. Without a
+          row of its own it would disappear the moment a band was unchecked,
+          taking the starting point of the investigation with it.
+        */}
+        <Row
+          label="Not associated yet"
+          checked={filters.showUnassociated}
+          count={counts.unassociated}
+          onToggle={() =>
+            onChange({ ...filters, showUnassociated: !filters.showUnassociated })
+          }
+        />
+        <p className="mt-1 text-[11px] leading-snug text-faint">
+          The band of the strongest association touching an entity.
+        </p>
       </section>
 
-      <section>
-        <div className="panel-title mb-1">Relationship</div>
-        {RELATIONSHIP_TYPES.filter(
-          (type) => (counts.byRelationshipType[type] ?? 0) > 0,
-        ).map((type: RelationshipType) => (
+      {/*
+        Only worth a section once there is something in it. An analyst who has
+        never ruled anybody out does not need a control for it, and a row
+        reading "0" is one more thing to read past on every investigation.
+      */}
+      {counts.differentIdentity > 0 && (
+        <section>
+          <div className="panel-title mb-1">Your rulings</div>
           <Row
-            key={type}
-            label={RELATIONSHIP_LABEL[type]}
-            checked={filters.relationshipTypes.has(type)}
-            count={counts.byRelationshipType[type]}
+            label="Different identity"
+            color="var(--color-rejected)"
+            checked={filters.showDifferentIdentity}
+            count={counts.differentIdentity}
             onToggle={() =>
               onChange({
                 ...filters,
-                relationshipTypes: toggle(filters.relationshipTypes, type),
+                showDifferentIdentity: !filters.showDifferentIdentity,
               })
             }
           />
-        ))}
-      </section>
-
-      <section className="space-y-2 border-t border-line pt-3">
-        <label className="flex items-center justify-between gap-2 text-[12px] text-dim">
-          <span>Minimum score</span>
-          <span className="font-mono text-[11px] text-accent">{filters.minScore}</span>
-        </label>
-        <input
-          type="range"
-          min={0}
-          max={100}
-          step={5}
-          value={filters.minScore}
-          onChange={(event) =>
-            onChange({ ...filters, minScore: Number(event.target.value) })
-          }
-          className="w-full accent-[var(--color-accent)]"
-        />
-        <Row
-          label="Hide rejected relationships"
-          checked={filters.hideRejected}
-          onToggle={() => onChange({ ...filters, hideRejected: !filters.hideRejected })}
-        />
-      </section>
+          <p className="mt-1 text-[11px] leading-snug text-faint">
+            Entities you judged to be somebody else. Nothing was deleted —
+            uncheck to take them off the canvas.
+          </p>
+        </section>
+      )}
     </div>
   )
 }

@@ -184,10 +184,17 @@ class AliasCandidate:
 
 
 def normalize_alias_candidate(value: str | None) -> str:
-    """Canonical comparison form for a handle: lowercase, trimmed edges."""
+    """Canonical comparison form for a handle: lowercase, whitespace trimmed.
+
+    Follows the same edge rule as :func:`normalize_username`: an underscore
+    is part of the handle, a trailing dot or hyphen is punctuation. "_alice"
+    and "alice" are different accounts, and folding them together here made
+    the detector report them as the same handle - so the one transformation
+    an analyst most wants to see went unreported.
+    """
     if not value:
         return ""
-    return str(value).strip().strip("".join(SEPARATORS)).lower()
+    return str(value).strip().strip(".-").lower()
 
 
 def strip_separators(value: str) -> str:

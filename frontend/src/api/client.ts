@@ -20,8 +20,10 @@ import type {
   Investigation,
   InvestigationDetail,
   InvestigationGraph,
+  ManualLinkInput,
   Relationship,
   RelationshipDetail,
+  SourceResults,
 } from '../types'
 
 const BASE = import.meta.env.VITE_API_BASE ?? '/api'
@@ -119,6 +121,10 @@ export const api = {
 
   getLeads: (id: string) => request<LeadList>(`/investigations/${id}/leads`),
 
+  /** What each source yielded, including the ones that yielded nothing. */
+  getResults: (id: string) =>
+    request<SourceResults>(`/investigations/${id}/results`),
+
   findPaths: (
     id: string,
     sourceEntityId: string,
@@ -162,6 +168,33 @@ export const api = {
       method: 'POST',
       body: JSON.stringify({ note: note ?? null }),
     }),
+
+  /**
+   * Rule that an entity belongs to somebody else.
+   *
+   * An analyst's assertion, and the only identity claim the system stores.
+   * It deletes nothing: the account, its observations and its evidence all
+   * survive, and `resetEntityIdentity` undoes it.
+   */
+  markDifferentIdentity: (id: string, note?: string) =>
+    request<EntityDetail>(`/entities/${id}/different-identity`, {
+      method: 'POST',
+      body: JSON.stringify({ note: note ?? null }),
+    }),
+
+  resetEntityIdentity: (id: string) =>
+    request<EntityDetail>(`/entities/${id}/reset-identity`, { method: 'POST' }),
+
+  /** Draw a link by hand. Stamped as analyst-asserted, and scores nothing. */
+  createLink: (investigationId: string, input: ManualLinkInput) =>
+    request<Relationship>(`/investigations/${investigationId}/links`, {
+      method: 'POST',
+      body: JSON.stringify(input),
+    }),
+
+  /** Remove a link an analyst drew. Engine-derived edges are refused. */
+  deleteLink: (relationshipId: string) =>
+    request<void>(`/relationships/${relationshipId}`, { method: 'DELETE' }),
 
   resetRelationship: (id: string) =>
     request<RelationshipDetail>(`/relationships/${id}/reset`, { method: 'POST' }),

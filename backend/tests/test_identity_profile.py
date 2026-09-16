@@ -115,7 +115,10 @@ async def test_profile_surfaces_contradictions(repo, investigation) -> None:
     profile = profile_for(repo, investigation)
     assert profile.statistics.contradictions >= 1
     assert profile.contradictions
-    assert any("website" in line.lower() for line in profile.contradictions)
+    # The website contradiction was removed after calibration showed it fired
+    # on more known-same pairs than known-different ones; the conflicting
+    # location is the one that measured as genuinely discriminating.
+    assert any("location" in line.lower() for line in profile.contradictions)
 
 
 async def test_a_rejected_entity_stops_contributing_attributes(

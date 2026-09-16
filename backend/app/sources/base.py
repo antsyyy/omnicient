@@ -71,6 +71,23 @@ REASON_MESSAGES: dict[str, str] = {
 }
 
 
+class SourceCategory(StrEnum):
+    """What kind of site a source is.
+
+    Grouping sources lets the interface and the profile say "four developer
+    accounts and a music profile" rather than listing nine platform names, and
+    it keeps the adapter registry legible as it grows.
+    """
+
+    SOCIAL = "social"
+    DEV = "dev"
+    GAMING = "gaming"
+    MUSIC = "music"
+    LEARNING = "learning"
+    WEB = "web"
+    IDENTITY = "identity"
+
+
 class SourceError(Exception):
     """A structured, non-fatal source failure."""
 
@@ -103,6 +120,10 @@ class ObservedProfile(BaseModel):
     display_name: str | None = None
     bio: str | None = None
     avatar_url: str | None = None
+    #: Perceptual hash of the avatar, filled in after the crawl. Lets the
+    #: engine recognise one photograph across platforms that each serve it
+    #: from a different address.
+    avatar_hash: str | None = None
     location: str | None = None
     email: str | None = None
     organization: str | None = None
@@ -171,6 +192,54 @@ class FetchResult:
     text: str = ""
     content_type: str = ""
     hops: list[str] = field(default_factory=list)
+    #: True when this body was reused rather than downloaded again. Nothing
+    #: was spent against the platform's limit to produce it.
+    from_cache: bool = False
+
+
+@dataclass
+class CachedResponse:
+    """A body worth reusing, and what the platform gave us to revalidate it."""
+
+    text: str
+    content_type: str
+    #: Validators the platform issued. Sending them back is what turns a
+    #: re-read into a 304, which every documented rate limit treats as free.
+    etag: str | None = None
+    last_modified: str | None = None
+    stored_at: float = 0.0
+
+
+def _is_quota_exhausted(response: httpx.Response) -> bool:
+    """Whether a 403 is really "you are out of quota" in disguise.
+
+    GitHub answers an exhausted limit with 403 and ``X-RateLimit-Remaining:
+    0`` rather than 429. Reported as BLOCKED it reads as "the platform
+    declined", which sends an analyst looking for a permissions problem that
+    does not exist - it is a limit that resets on its own.
+    """
+    if response.status_code != 403:
+        return False
+    remaining = response.headers.get("x-ratelimit-remaining")
+    return remaining is not None and remaining.strip() == "0"
+
+
+def _retry_hint(response: httpx.Response) -> str:
+    """When the platform says it will accept requests again.
+
+    Taken from the response rather than guessed, and only ever reported -
+    waiting it out is the analyst's decision to make.
+    """
+    retry_after = response.headers.get("retry-after")
+    if retry_after and retry_after.strip().isdigit():
+        return f"; retry after {int(retry_after.strip())}s"
+    reset = response.headers.get("x-ratelimit-reset")
+    if reset and reset.strip().isdigit():
+        seconds = int(reset.strip()) - int(time.time())
+        if 0 < seconds <= 86_400:
+            minutes = max(1, round(seconds / 60))
+            return f"; quota resets in about {minutes} min"
+    return ""
 
 
 class SafeFetcher:
@@ -202,7 +271,18 @@ class SafeFetcher:
         self._owns_client = client is None
         self._last_request: dict[str, float] = {}
         self._robots: dict[str, RobotFileParser | None] = {}
-        self._lock = asyncio.Lock()
+        #: Bodies already fetched this session, keyed by URL. Shared by every
+        #: adapter, because the fetcher is shared.
+        self._cache: dict[str, CachedResponse] = {}
+        #: Per-host quota as the platform last reported it, for the operator
+        #: to see before a crawl rather than discover during one.
+        self.quota: dict[str, dict[str, str]] = {}
+        # One lock per host rather than one for the fetcher. A single lock
+        # held across the politeness sleep would serialise every request the
+        # crawler makes, including to unrelated hosts - which defeats the
+        # point of fetching sources concurrently.
+        self._host_locks: dict[str, asyncio.Lock] = {}
+        self._registry_lock = asyncio.Lock()
 
     async def aclose(self) -> None:
         if self._owns_client:
@@ -223,6 +303,18 @@ class SafeFetcher:
         one exception type: SSRF rejection, robots restriction, rate limiting,
         oversized bodies, timeouts and network errors.
         """
+        cache_key = self._cache_key(url, headers)
+        fresh = self._cached(cache_key)
+        if fresh is not None:
+            logger.debug("cache_hit url=%s", url)
+            return FetchResult(
+                url=url,
+                status_code=200,
+                text=fresh.text,
+                content_type=fresh.content_type,
+                from_cache=True,
+            )
+
         current = url
         hops: list[str] = []
         seen: set[str] = set()
@@ -237,7 +329,32 @@ class SafeFetcher:
             seen.add(validated.url)
             await self._check_robots(validated.url)
             await self._respect_delay(validated.host)
-            response = await self._request(validated.url, headers)
+            # Offer the validators the platform gave us last time. If nothing
+            # changed it answers 304 with no body, which costs no quota on
+            # every API that documents one.
+            final_key = self._cache_key(validated.url, headers)
+            response = await self._request(
+                validated.url, self._revalidation_headers(final_key, headers)
+            )
+            self._remember_quota(validated.host, response)
+
+            if response.status_code == 304:
+                await response.aclose()
+                stale = self._cache.get(final_key)
+                if stale is not None:
+                    stale.stored_at = time.monotonic()
+                    logger.debug("not_modified url=%s", validated.url)
+                    return FetchResult(
+                        url=validated.url,
+                        status_code=200,
+                        text=stale.text,
+                        content_type=stale.content_type,
+                        hops=hops,
+                        from_cache=True,
+                    )
+                # Revalidated something we no longer hold: ask again plainly.
+                response = await self._request(validated.url, headers)
+                self._remember_quota(validated.host, response)
 
             if response.status_code in (301, 302, 303, 307, 308):
                 location = response.headers.get("location")
@@ -260,17 +377,100 @@ class SafeFetcher:
             finally:
                 await response.aclose()
 
+            content_type = response.headers.get("content-type", "")
+            self._store(
+                {cache_key, final_key}, response, text, content_type
+            )
+
             return FetchResult(
                 url=validated.url,
                 status_code=response.status_code,
                 text=text,
-                content_type=response.headers.get("content-type", ""),
+                content_type=content_type,
                 hops=hops,
             )
 
         raise SourceError(
             FailureReason.NETWORK_ERROR, "too many redirects", url
         )
+
+    # -- reuse ------------------------------------------------------------
+
+    @staticmethod
+    def _cache_key(url: str, headers: dict[str, str] | None) -> str:
+        """What makes two fetches of the same address the same fetch.
+
+        The Accept header is part of it: several of these platforms serve a
+        JSON document and an HTML page from one URL, and handing back the
+        wrong one would be a parse failure at best and another account's data
+        at worst.
+        """
+        accept = (headers or {}).get("Accept", "")
+        return f"{url}\n{accept}"
+
+    def _cached(self, key: str) -> CachedResponse | None:
+        """A stored body still inside its lifetime, if there is one."""
+        ttl = self.settings.cache_ttl_seconds
+        if ttl <= 0:
+            return None
+        entry = self._cache.get(key)
+        if entry is None:
+            return None
+        if time.monotonic() - entry.stored_at > ttl:
+            return None
+        return entry
+
+    def _revalidation_headers(
+        self, key: str, headers: dict[str, str] | None
+    ) -> dict[str, str]:
+        """Add the conditional headers for a body we already hold."""
+        merged = dict(headers or {})
+        entry = self._cache.get(key)
+        if entry is None:
+            return merged
+        if entry.etag:
+            merged.setdefault("If-None-Match", entry.etag)
+        if entry.last_modified:
+            merged.setdefault("If-Modified-Since", entry.last_modified)
+        return merged
+
+    def _store(
+        self,
+        keys: set[str],
+        response: httpx.Response,
+        text: str,
+        content_type: str,
+    ) -> None:
+        """Keep a body for reuse, under the asked-for and final addresses."""
+        if self.settings.cache_ttl_seconds <= 0:
+            return
+        entry = CachedResponse(
+            text=text,
+            content_type=content_type,
+            etag=response.headers.get("etag"),
+            last_modified=response.headers.get("last-modified"),
+            stored_at=time.monotonic(),
+        )
+        for key in keys:
+            self._cache[key] = entry
+        # Oldest out first. A crawl touches a few hundred URLs, so this is a
+        # bound on memory rather than a cache-eviction strategy worth tuning.
+        while len(self._cache) > max(1, self.settings.cache_max_entries):
+            self._cache.pop(next(iter(self._cache)))
+
+    def _remember_quota(self, host: str, response: httpx.Response) -> None:
+        """Record what the platform says is left, for the operator to read."""
+        reported = {
+            name: response.headers[header]
+            for name, header in (
+                ("remaining", "x-ratelimit-remaining"),
+                ("limit", "x-ratelimit-limit"),
+                ("reset", "x-ratelimit-reset"),
+            )
+            if header in response.headers
+        }
+        if reported:
+            self.quota[host] = reported
 
     def _validate(self, url: str):
         try:
@@ -305,14 +505,62 @@ class SafeFetcher:
         status = response.status_code
         if status == 404 or status == 410:
             raise SourceError(FailureReason.NOT_FOUND, f"HTTP {status}", url)
-        if status == 429:
-            raise SourceError(FailureReason.RATE_LIMITED, "HTTP 429", url)
+        if status == 429 or _is_quota_exhausted(response):
+            raise SourceError(
+                FailureReason.RATE_LIMITED,
+                f"HTTP {status}{_retry_hint(response)}",
+                url,
+            )
         if status in (401, 403):
             raise SourceError(FailureReason.BLOCKED, f"HTTP {status}", url)
         if status >= 400:
             raise SourceError(
                 FailureReason.NETWORK_ERROR, f"HTTP {status}", url
             )
+
+    async def get_bytes(self, url: str, *, limit: int | None = None) -> bytes:
+        """Fetch a binary resource - an avatar - under the same guards.
+
+        Everything a page fetch gets: the SSRF check on the address and on
+        every redirect hop, the per-host politeness delay, the robots
+        decision, and a size ceiling. The ceiling is lower by default because
+        a profile picture that is larger than a megabyte is not a profile
+        picture.
+
+        Deliberately not routed through the response cache: the cache holds
+        decoded text, and an image is not text.
+        """
+        validated = self._validate(url)
+        await self._check_robots(validated.url)
+        await self._respect_delay(validated.host)
+        response = await self._request(validated.url, {"Accept": "image/*"})
+        try:
+            self._raise_for_status(response, validated.url)
+            return await self._read_bytes(response, limit or self.settings.max_image_bytes)
+        finally:
+            await response.aclose()
+
+    async def _read_bytes(self, response: httpx.Response, limit: int) -> bytes:
+        """Read at most ``limit`` bytes, abandoning anything larger."""
+        declared = response.headers.get("content-length")
+        if declared and declared.isdigit() and int(declared) > limit:
+            raise SourceError(
+                FailureReason.TOO_LARGE,
+                f"content-length {declared} exceeds {limit} bytes",
+                str(response.url),
+            )
+        chunks: list[bytes] = []
+        total = 0
+        async for chunk in response.aiter_bytes():
+            total += len(chunk)
+            if total > limit:
+                raise SourceError(
+                    FailureReason.TOO_LARGE,
+                    f"response exceeded {limit} bytes",
+                    str(response.url),
+                )
+            chunks.append(chunk)
+        return b"".join(chunks)
 
     async def _read_limited(self, response: httpx.Response) -> str:
         """Read at most ``max_response_bytes`` of the body."""
@@ -337,12 +585,27 @@ class SafeFetcher:
             chunks.append(chunk)
         return b"".join(chunks).decode(response.encoding or "utf-8", errors="replace")
 
+    async def _lock_for(self, host: str) -> asyncio.Lock:
+        """The politeness lock for one host, created on first use."""
+        async with self._registry_lock:
+            lock = self._host_locks.get(host)
+            if lock is None:
+                lock = asyncio.Lock()
+                self._host_locks[host] = lock
+            return lock
+
     async def _respect_delay(self, host: str) -> None:
-        """Wait out the configured inter-request delay for a host."""
+        """Wait out the configured inter-request delay for a host.
+
+        Serialises requests to the *same* host while leaving different hosts
+        free to proceed in parallel, so politeness costs concurrency nothing
+        across a fan-out to twenty different services.
+        """
         delay = self.settings.request_delay
         if delay <= 0:
             return
-        async with self._lock:
+        lock = await self._lock_for(host)
+        async with lock:
             last = self._last_request.get(host, 0.0)
             elapsed = time.monotonic() - last
             if last and elapsed < delay:
@@ -396,6 +659,24 @@ class SourceAdapter(ABC):
     platform: str = ""
     #: Human-readable name used in evidence descriptions and events.
     name: str = ""
+    #: Which kind of site this is, for grouping in the UI and the profile.
+    category: SourceCategory = SourceCategory.SOCIAL
+
+    #: A handle that really does have a public profile on this platform.
+    #:
+    #: Used by the self-check (``python -m app.selfcheck``) to notice when a
+    #: site changes its markup and an adapter quietly stops finding anybody.
+    #: Pick something stable and obviously public - a platform's own account,
+    #: a well-known project - never a private individual.
+    probe_present: str = ""
+    #: A handle that does not exist, to catch the opposite failure: a source
+    #: that answers "found" for everything. Telegram did exactly that, for
+    #: months, because it serves a valid-looking card for every URL.
+    probe_absent: str = "zz-omnicient-absent-4471"
+    #: How this platform expects a credential to be presented.
+    auth_scheme: str = "Bearer"
+    #: Set by the concrete adapters, which all take a shared fetcher.
+    fetcher: SafeFetcher
 
     @abstractmethod
     async def lookup(self, identifier: str) -> LookupResult:
@@ -404,6 +685,18 @@ class SourceAdapter(ABC):
     def profile_url(self, identifier: str) -> str | None:
         """Canonical public URL for an identifier on this platform."""
         return None
+
+    def credentials(self) -> dict[str, str]:
+        """Authorization header for this platform, if the operator set one.
+
+        Sent only to this adapter's own endpoint. The value is never logged
+        and never leaves the request.
+        """
+        settings = getattr(self, "fetcher", None)
+        token = settings.settings.token_for(self.platform) if settings else ""
+        if not token:
+            return {}
+        return {"Authorization": f"{self.auth_scheme} {token}"}
 
 
 # ---------------------------------------------------------------------------
@@ -457,20 +750,33 @@ def looks_like_login_wall(html: str) -> bool:
     return any(marker in lowered for marker in LOGIN_WALL_MARKERS)
 
 
-def page_is_profile_for(meta: dict[str, str], identifier: str) -> bool:
+def page_is_profile_for(
+    meta: dict[str, str], identifier: str, platform: str | None = None
+) -> bool:
     """Check that a fetched page really is the requested profile.
 
     Meta platforms answer an unknown or gated handle with HTTP 200 and a
     generic page whose canonical URL points at that interstitial, so comparing
     the advertised canonical against the requested handle filters them out
     without guessing from page text.
+
+    ``platform`` lets the check skip a known profile prefix: last.fm publishes
+    ``/user/rj``, so comparing the first path segment alone would reject every
+    profile on the site.
     """
+    from ..utils.url_parser import PROFILE_PATH_PREFIXES
+
     url = meta.get("og:url") or meta.get("canonical")
     if not url:
         return True  # Nothing to verify against; other checks still apply.
     segments = [s for s in urlparse(url).path.split("/") if s]
     if not segments:
         return False
+
+    prefixes = PROFILE_PATH_PREFIXES.get(platform or "", ())
+    if len(segments) > 1 and segments[0].lower() in prefixes:
+        segments = segments[1:]
+
     first = segments[0].lstrip("@").lower()
     if first in NON_PROFILE_PATHS:
         return False
@@ -511,6 +817,22 @@ def visible_text(html: str, limit: int = 20000) -> str:
     return " ".join(soup.get_text(" ", strip=True).split())[:limit]
 
 
+def _agent_urls() -> frozenset[str]:
+    """URLs appearing in our own user agent string, normalised for comparison."""
+    from ..utils.url_parser import extract_urls
+
+    return frozenset(
+        (normalize_url(url) or url).rstrip("/")
+        for url in extract_urls(get_settings().user_agent)
+    )
+
+
+def _is_own_agent(link: str | None) -> bool:
+    if not link:
+        return False
+    return (normalize_url(link) or link).rstrip("/") in _agent_urls()
+
+
 def enrich_profile(profile: ObservedProfile) -> ObservedProfile:
     """Fill in the derived fields the crawler pivots on.
 
@@ -528,7 +850,13 @@ def enrich_profile(profile: ObservedProfile) -> ObservedProfile:
     text_sources = " \n".join(
         part for part in (profile.bio, profile.display_name, profile.location) if part
     )
-    links = list(profile.external_links)
+    # Never report our own crawler as somebody's account.
+    #
+    # The user agent carries a project URL, and at least one site - about.me -
+    # echoes the request headers back into the page it serves. Extracted
+    # naively, that put the same GitHub account on every profile read from
+    # there: the observer appearing in its own observations.
+    links = [link for link in profile.external_links if not _is_own_agent(link)]
 
     profile.references = [
         reference
@@ -538,7 +866,15 @@ def enrich_profile(profile: ObservedProfile) -> ObservedProfile:
     ]
     profile.websites = extract_websites(profile.bio, links)
     profile.emails = extract_emails(text_sources)
-    profile.organizations = extract_organizations(text_sources)
+    # Merge rather than overwrite. An adapter that read organizations from
+    # structured page data - Facebook's Intro block, a developer profile's
+    # company field - knows more than a guess at capitalised words after
+    # "at", and replacing its findings with that guess threw them away.
+    profile.organizations = list(profile.organizations) + [
+        name
+        for name in extract_organizations(text_sources)
+        if name not in profile.organizations
+    ]
     if profile.emails and not profile.email:
         profile.email = profile.emails[0]
     if profile.organizations and not profile.organization:
@@ -628,7 +964,7 @@ class OpenGraphProfileAdapter(SourceAdapter):
         title = meta.get("og:title")
         if not title:
             return None
-        if not page_is_profile_for(meta, identifier):
+        if not page_is_profile_for(meta, identifier, self.platform):
             return None
 
         display_name = self.extract_display_name(title)
@@ -654,6 +990,9 @@ class OpenGraphProfileAdapter(SourceAdapter):
                 display_name=display_name,
                 bio=bio,
                 avatar_url=avatar,
+                location=self.extract_location(meta, html),
+                organization=self.extract_organization(meta, html),
+                organizations=self.extract_organizations(meta, html),
                 external_links=links,
                 source=self.platform,
                 metadata=metadata,
@@ -684,6 +1023,32 @@ class OpenGraphProfileAdapter(SourceAdapter):
 
         return extract_urls(bio)
 
+    def extract_location(self, meta: dict[str, str], html: str) -> str | None:
+        """The place the profile publishes for itself, where it publishes one.
+
+        Worth its own hook because the correlation engine treats conflicting
+        locations as evidence *against* an association, so a source that can
+        read one is contributing to both sides of the score.
+        """
+        return None
+
+    def extract_organization(self, meta: dict[str, str], html: str) -> str | None:
+        """The employer or institution the profile names."""
+        return None
+
+    def extract_organizations(self, meta: dict[str, str], html: str) -> list[str]:
+        """Every organization the profile names - employers past and present,
+        and schools.
+
+        Separate from :meth:`extract_organization` because they answer
+        different questions. That one is "where do they work", shown to an
+        analyst; this one is "what institutions does this profile mention",
+        which is what the correlation engine matches across platforms. Two
+        profiles naming the same former employer is evidence worth scoring
+        even though neither works there now.
+        """
+        return []
+
     def extract_metadata(self, meta: dict[str, str], html: str) -> dict[str, Any]:
         """Extra observed fields to record, e.g. audience counts.
 
@@ -700,9 +1065,16 @@ class JsonProfileAdapter(SourceAdapter):
     GitHub and Reddit both serve a documented, unauthenticated endpoint
     describing a public account.  Using it is the *polite* option: it is the
     interface those platforms publish for this purpose, it returns far less
-    data than scraping the HTML page, and it is stable.  No token, cookie or
-    private endpoint is involved - an anonymous request is rate limited, and a
-    rate limit is reported (``RATE_LIMITED``) rather than worked around.
+    data than scraping the HTML page, and it is stable.
+
+    An anonymous request is rate limited, and hitting that limit is reported
+    (``RATE_LIMITED``) rather than worked around.  The operator may supply
+    their own API credential for a platform, which every one of these
+    documents as the way to be granted a larger allowance - GitHub raises an
+    authenticated caller from 60 requests an hour to 5,000.  That is the
+    published route to more quota, not a way around the limit: the requests
+    are still counted, still refused when the larger allowance runs out, and
+    still only ever ask for public data.
     """
 
     #: Public JSON endpoint, formatted with ``identifier``.
@@ -722,18 +1094,32 @@ class JsonProfileAdapter(SourceAdapter):
     def api_url(self, identifier: str) -> str:
         return self.api_template.format(identifier=identifier)
 
+    def normalize_identifier(self, identifier: str) -> str:
+        """Canonicalise the identifier before it is looked up.
+
+        Overridable because not every platform is keyed by a handle: Stack
+        Exchange has only display names, which contain spaces that the handle
+        normalizer rejects outright.
+        """
+        from ..utils.normalization import normalize_username
+
+        return normalize_username(identifier)
+
     async def lookup(self, identifier: str) -> LookupResult:
         """Fetch and parse a public profile document."""
-        from ..utils.normalization import NormalizationError, normalize_username
+        from ..utils.normalization import NormalizationError
 
         try:
-            identifier = normalize_username(identifier)
+            identifier = self.normalize_identifier(identifier)
         except NormalizationError as exc:
             return LookupResult.failure(SourceError(FailureReason.NOT_FOUND, str(exc)))
 
         api_url = self.api_url(identifier)
         try:
-            fetched = await self.fetcher.get(api_url, headers={"Accept": self.accept})
+            fetched = await self.fetcher.get(
+                api_url,
+                headers={"Accept": self.accept, **self.credentials()},
+            )
         except SourceError as exc:
             logger.info(
                 "source_unavailable platform=%s identifier=%s reason=%s",
@@ -779,3 +1165,86 @@ class JsonProfileAdapter(SourceAdapter):
         self, identifier: str, payload: Any, url: str
     ) -> ObservedProfile | None:
         """Build an :class:`ObservedProfile` from the public JSON document."""
+
+
+class XmlProfileAdapter(SourceAdapter):
+    """Adapter for platforms that publish a public profile as XML.
+
+    Steam is the notable one: appending ``?xml=1`` to a community profile
+    returns a small, stable document instead of a 200KB page built by
+    JavaScript. Reading that is both lighter and more reliable than scraping
+    the rendered profile.
+    """
+
+    #: Public XML endpoint, formatted with ``identifier``.
+    api_template: str = ""
+    #: Human-facing profile URL, formatted with ``identifier``.
+    url_template: str = ""
+    accept: str = "text/xml,application/xml"
+
+    def __init__(self, fetcher: SafeFetcher | None = None) -> None:
+        self.fetcher = fetcher or SafeFetcher()
+
+    def profile_url(self, identifier: str) -> str:
+        return self.url_template.format(identifier=identifier)
+
+    def api_url(self, identifier: str) -> str:
+        return self.api_template.format(identifier=identifier)
+
+    async def lookup(self, identifier: str) -> LookupResult:
+        """Fetch and parse a public XML profile document."""
+        from ..utils.normalization import NormalizationError, normalize_username
+
+        try:
+            identifier = normalize_username(identifier)
+        except NormalizationError as exc:
+            return LookupResult.failure(SourceError(FailureReason.NOT_FOUND, str(exc)))
+
+        api_url = self.api_url(identifier)
+        try:
+            fetched = await self.fetcher.get(
+                api_url,
+                headers={"Accept": self.accept, **self.credentials()},
+            )
+        except SourceError as exc:
+            logger.info(
+                "source_unavailable platform=%s identifier=%s reason=%s",
+                self.platform,
+                identifier,
+                exc.reason,
+            )
+            return LookupResult.failure(exc)
+
+        try:
+            soup = BeautifulSoup(fetched.text, "lxml-xml")
+            profile = self.parse_xml(identifier, soup, self.profile_url(identifier))
+        except Exception as exc:  # noqa: BLE001 - malformed XML must not abort
+            logger.warning(
+                "parse_failed platform=%s identifier=%s error=%s",
+                self.platform,
+                identifier,
+                exc,
+            )
+            return LookupResult.failure(
+                SourceError(FailureReason.PARSE_ERROR, str(exc), api_url),
+                pages_fetched=1,
+            )
+
+        if profile is None:
+            return LookupResult(pages_fetched=1, url=api_url)
+        return LookupResult(entities=[profile], pages_fetched=1, url=api_url)
+
+    @abstractmethod
+    def parse_xml(
+        self, identifier: str, soup: BeautifulSoup, url: str
+    ) -> ObservedProfile | None:
+        """Build an :class:`ObservedProfile` from the parsed XML document."""
+
+
+def xml_text(soup: BeautifulSoup, tag: str) -> str | None:
+    """Trimmed text of the first matching element, or ``None``."""
+    element = soup.find(tag)
+    if element is None:
+        return None
+    value = element.get_text(strip=True)
+    return value or None

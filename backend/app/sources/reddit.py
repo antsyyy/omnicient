@@ -29,6 +29,7 @@ class RedditAdapter(JsonProfileAdapter):
     name = "Reddit"
     api_template = "https://www.reddit.com/user/{identifier}/about.json"
     url_template = "https://www.reddit.com/user/{identifier}"
+    probe_present = "spez"
 
     def parse_json(
         self, identifier: str, payload: Any, url: str

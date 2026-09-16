@@ -17,6 +17,8 @@ from ..models.enums import (
     ConfidenceLevel,
     DiscoveryMethod,
     EntityType,
+    EntityVerdict,
+    RelationshipOrigin,
     RelationshipType,
 )
 
@@ -45,6 +47,12 @@ class GraphNode(BaseModel):
     depth: int = 0
     discovery_method: DiscoveryMethod = DiscoveryMethod.DIRECT
     degree: int = 0
+    #: An analyst's ruling that this entity is somebody else. The canvas
+    #: strikes it through rather than dropping it, and the filter panel can
+    #: hide it - but the graph still ships it, because an entity the analyst
+    #: cannot see is one they cannot un-rule.
+    analyst_verdict: EntityVerdict = EntityVerdict.UNREVIEWED
+    analyst_note: str | None = None
     # Strongest association attached to this node, used for node badges.
     confidence_level: ConfidenceLevel | None = None
     confidence_score: float | None = None
@@ -62,6 +70,9 @@ class GraphEdge(BaseModel):
     confidence_score: float
     confidence_level: ConfidenceLevel
     analyst_status: AnalystStatus
+    #: Whether a person drew this link or the engine derived it. The canvas
+    #: must never draw the two identically.
+    origin: RelationshipOrigin = RelationshipOrigin.ENGINE
     evidence_count: int = 0
     contradiction_count: int = 0
     summary: str | None = None

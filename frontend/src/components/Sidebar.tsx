@@ -1,5 +1,5 @@
+import { useMemo } from 'react'
 import type { FilterState, InvestigationDetail, InvestigationGraph } from '../types'
-import ActivityLog from './ActivityLog'
 import Filters from './Filters'
 
 interface Props {
@@ -7,6 +7,8 @@ interface Props {
   graph: InvestigationGraph | null
   filters: FilterState
   onFiltersChange: (next: FilterState) => void
+  /** Filters shape the graph; the results list has its own. */
+  showFilters: boolean
 }
 
 function Stat({ label, value, tone }: { label: string; value: number; tone?: string }) {
@@ -23,20 +25,50 @@ function Stat({ label, value, tone }: { label: string; value: number; tone?: str
   )
 }
 
-/** Left rail: what this investigation found, what to show, and what happened. */
+/**
+ * Left rail: what this investigation found, and what to show of it.
+ *
+ * Deliberately thin. It used to carry the full activity log and a list of
+ * every source that declined, which between them filled the rail with several
+ * hundred lines an analyst had to scroll past - and both said, less clearly,
+ * what the results view already says per source and in context.
+ */
 export default function Sidebar({
   investigation,
   graph,
   filters,
   onFiltersChange,
+  showFilters,
 }: Props) {
   const stats = graph?.stats
-  const running =
-    investigation.status === 'CRAWLING' || investigation.status === 'ANALYZING'
+
+  /*
+   * Counted from the nodes, not from the backend's relationship tallies.
+   * The filter narrows entities, so the number beside each band has to be
+   * the number of entities it would hide - the edge counts said "Low 127"
+   * next to a control that removed nineteen things from the canvas.
+   */
+  const confidenceCounts = useMemo(() => {
+    const byConfidence: Record<string, number> = {}
+    let unassociated = 0
+    let differentIdentity = 0
+    for (const node of graph?.nodes ?? []) {
+      if (node.analyst_verdict === 'DIFFERENT_IDENTITY') differentIdentity += 1
+      if (node.confidence_level === null) unassociated += 1
+      else byConfidence[node.confidence_level] =
+        (byConfidence[node.confidence_level] ?? 0) + 1
+    }
+    return {
+      byEntityType: stats?.by_entity_type ?? {},
+      byConfidence,
+      unassociated,
+      differentIdentity,
+    }
+  }, [graph?.nodes, stats?.by_entity_type])
 
   return (
-    <aside className="flex w-[280px] shrink-0 flex-col overflow-hidden border-r border-line bg-panel">
-      <div className="flex max-h-[62%] flex-none flex-col overflow-y-auto">
+    <aside className="flex w-[260px] shrink-0 flex-col overflow-y-auto border-r border-line bg-panel">
+      <div className="flex flex-col">
       <section className="border-b border-line px-3 py-3">
         <div className="panel-title">Seed</div>
         <div className="mt-0.5 font-mono text-[13px] text-ink">
@@ -61,48 +93,18 @@ export default function Sidebar({
         />
       </section>
 
-      {investigation.issues.length > 0 && (
-        <section className="border-b border-line px-3 py-3">
-          <div className="panel-title mb-1">Sources unavailable</div>
-          <ul className="space-y-2">
-            {investigation.issues.map((issue, index) => (
-              <li
-                key={`${issue.platform}-${index}`}
-                className="rounded border border-band-medium/40 bg-band-medium/5 px-2 py-1"
-              >
-                <div className="font-mono text-[11px] text-band-medium">
-                  {issue.platform}
-                  {issue.identifier ? `/@${issue.identifier}` : ''} · {issue.reason}
-                </div>
-                <p className="mt-0.5 text-[11px] leading-snug text-faint">
-                  {issue.detail}
-                </p>
-              </li>
-            ))}
-          </ul>
-          <p className="mt-2 text-[11px] leading-snug text-faint">
-            The investigation continues using the evidence already discovered.
-          </p>
-        </section>
-      )}
-
+      {showFilters && (
       <section className="border-b border-line px-3 py-3">
         <div className="panel-title mb-2">Filters</div>
         <Filters
           filters={filters}
-          counts={{
-            byEntityType: stats?.by_entity_type ?? {},
-            byRelationshipType: stats?.by_relationship_type ?? {},
-            byConfidence: stats?.by_confidence ?? {},
-          }}
+          counts={confidenceCounts}
           onChange={onFiltersChange}
         />
       </section>
+      )}
       </div>
 
-      <div className="flex min-h-0 flex-1 flex-col border-t border-line">
-        <ActivityLog events={investigation.events} live={running} />
-      </div>
     </aside>
   )
 }

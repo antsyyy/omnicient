@@ -63,6 +63,43 @@ def test_detect_platform_and_website_identity() -> None:
     assert website_identity("https://github.com/alice-security") is None
 
 
+def test_a_country_code_domain_is_not_truncated() -> None:
+    """``example.co.uk`` must not be reported as ``example.co``.
+
+    Not a cosmetic truncation: ``example.co`` is a separate registrable
+    domain that somebody else owns, so the crawler would fetch the wrong
+    site and record it as this person's. The matcher stopped at the "co" it
+    recognised and left the country code behind.
+    """
+    assert extract_urls("example.co.uk") == ["https://example.co.uk"]
+    assert extract_urls("bbc.co.uk/news") == ["https://bbc.co.uk/news"]
+    assert extract_urls("shop.com.au") == ["https://shop.com.au"]
+    assert extract_urls("site.com.br") == ["https://site.com.br"]
+    # .ac.uk is how UK universities are written, which education rows hit.
+    assert extract_urls("warwick.ac.uk") == ["https://warwick.ac.uk"]
+
+
+def test_a_plain_domain_is_unaffected() -> None:
+    assert extract_urls("alice.dev") == ["https://alice.dev"]
+    assert extract_urls("mail.google.com") == ["https://mail.google.com"]
+    assert extract_urls("foo.co") == ["https://foo.co"]
+
+
+def test_a_sentence_boundary_is_not_read_as_a_country_code() -> None:
+    """"example.com. Also" must stay example.com, and prose stays prose."""
+    assert extract_urls("example.com. Also here") == ["https://example.com"]
+    # A missing space after a full stop must not manufacture a website.
+    assert extract_urls("went home.Today was fine") == []
+    assert extract_urls("firstname.lastname") == []
+
+
+def test_country_code_domains_survive_alongside_others() -> None:
+    assert extract_urls("see alice.dev and bbc.co.uk today") == [
+        "https://alice.dev",
+        "https://bbc.co.uk",
+    ]
+
+
 def test_extract_urls_finds_links_and_bare_domains() -> None:
     text = "Portfolio https://alice.dev/blog and mirror alice-mirror.dev."
     assert extract_urls(text) == ["https://alice.dev/blog", "https://alice-mirror.dev"]

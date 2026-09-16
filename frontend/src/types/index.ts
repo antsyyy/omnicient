@@ -23,11 +23,23 @@ export type RelationshipType =
   | 'SHARED_AVATAR'
   | 'SHARED_ATTRIBUTE'
   | 'POTENTIAL_SAME_IDENTITY'
+  | 'POTENTIAL_ALIAS'
   | 'CONTRADICTORY'
 
 export type ConfidenceLevel = 'LOW' | 'MEDIUM' | 'HIGH' | 'VERY_HIGH' | 'INSUFFICIENT'
 
 export type AnalystStatus = 'UNREVIEWED' | 'CONFIRMED' | 'REJECTED'
+
+/**
+ * An analyst's ruling that an entity belongs to somebody else.
+ *
+ * Separate from AnalystStatus, which rules on a relationship - whether the
+ * evidence between two entities supports an association. This rules on the
+ * entity: a namesake, a reused handle, an account established to be another
+ * party. It is the only identity claim the system stores, the engine never
+ * sets it, and it deletes nothing.
+ */
+export type EntityVerdict = 'UNREVIEWED' | 'DIFFERENT_IDENTITY'
 
 export type DiscoveryMethod = 'SEED' | 'DIRECT' | 'INDIRECT' | 'SIMILARITY' | 'DEMO'
 
@@ -59,6 +71,9 @@ export interface Health {
   database: { engine: string; connected: boolean; error: string | null }
   demo_seed: { platform: string; identifier: string }
   sources: string[]
+  /** Sources grouped by the kind of site they read. */
+  sources_by_category: Record<string, string[]>
+  source_count: number
   demo_sources: string[]
   crawler: {
     max_depth: number
@@ -148,6 +163,9 @@ export interface Entity {
   depth: number
   is_seed: boolean
   resolved: boolean
+  analyst_verdict: EntityVerdict
+  analyst_note: string | null
+  reviewed_at: string | null
   first_seen: string
   last_seen: string
   created_at: string
@@ -167,6 +185,9 @@ export interface EntitySummary {
   name: string
   identifier: string
   url: string | null
+  display_name: string | null
+  /** The profile picture, where the platform published one. */
+  avatar_url: string | null
 }
 
 export interface Evidence {
@@ -209,6 +230,9 @@ export interface Relationship {
   relationship_label: string
   confidence_score: number
   confidence_level: ConfidenceLevel
+  origin: RelationshipOrigin
+  /** Whether a person drew this link rather than the engine deriving it. */
+  analyst_asserted: boolean
   analyst_status: AnalystStatus
   analyst_note: string | null
   reviewed_at: string | null
@@ -241,10 +265,20 @@ export interface GraphNode {
   depth: number
   discovery_method: DiscoveryMethod
   degree: number
+  analyst_verdict: EntityVerdict
+  analyst_note: string | null
   confidence_level: ConfidenceLevel | null
   confidence_score: number | null
   position: { x: number; y: number }
 }
+
+/**
+ * Who asserted a relationship.
+ *
+ * An engine edge rests on observations; an analyst edge rests on a person's
+ * judgement. The interface must never draw the two identically.
+ */
+export type RelationshipOrigin = 'ENGINE' | 'ANALYST'
 
 export interface GraphEdge {
   id: string
@@ -255,6 +289,7 @@ export interface GraphEdge {
   confidence_score: number
   confidence_level: ConfidenceLevel
   analyst_status: AnalystStatus
+  origin: RelationshipOrigin
   evidence_count: number
   contradiction_count: number
   summary: string | null
@@ -311,10 +346,26 @@ export interface NewInvestigationInput {
 /** Client-side graph filter state. */
 export interface FilterState {
   entityTypes: Set<EntityType>
-  relationshipTypes: Set<RelationshipType>
+  /**
+   * Bands an entity's *strongest* association may fall in.
+   *
+   * Filters entities, not edges. Filtering edges by confidence changed
+   * nothing an analyst could see: the canvas only draws associations that
+   * have been confirmed, so the bands were being applied to lines that were
+   * already hidden.
+   */
   confidenceLevels: Set<ConfidenceLevel>
-  hideRejected: boolean
-  minScore: number
+  /** Keep entities that no association touches yet - the seed, and misses. */
+  showUnassociated: boolean
+  /**
+   * Keep entities an analyst has ruled a different party.
+   *
+   * On by default. Ruling one out is a judgement, not a delete, and an
+   * analyst who cannot see what they ruled out cannot change their mind
+   * about it - so the canvas strikes them through and this hides them only
+   * when asked.
+   */
+  showDifferentIdentity: boolean
 }
 
 // ---------------------------------------------------------------------------
@@ -522,3 +573,78 @@ export interface LeadList {
   total: number
   by_priority: Record<string, number>
 }
+
+// ---------------------------------------------------------------------------
+// Per-source results
+// ---------------------------------------------------------------------------
+
+/**
+ * What happened when a source was queried.
+ *
+ * The two that matter most are the ones a graph cannot tell apart:
+ * `NOT_FOUND` means the source answered and the handle is not there, while
+ * `UNAVAILABLE` means it never answered at all. Both leave no node behind.
+ */
+export type SourceOutcome =
+  | 'FOUND'
+  | 'NOT_FOUND'
+  | 'UNAVAILABLE'
+  | 'REFERENCED_ONLY'
+  | 'NOT_QUERIED'
+
+export interface SourceResult {
+  platform: string
+  platform_name: string
+  category: string
+  outcome: SourceOutcome
+  outcome_label: string
+
+  entity: EntitySummary | null
+  identifier: string | null
+  display_name: string | null
+  url: string | null
+
+  confidence: ConfidenceLevel | null
+  score: number | null
+  analyst_status: AnalystStatus | null
+  relationship_id: string | null
+  evidence_count: number
+  contradiction_count: number
+
+  reason: string | null
+  detail: string | null
+  /** Whether there is an association here an analyst could rule on. */
+  actionable: boolean
+}
+
+export interface SourceResults {
+  investigation_id: string
+  seed_identifier: string
+  seed_type: string
+  results: SourceResult[]
+  summary: Record<string, number>
+  found: number
+  queried: number
+}
+
+/** Body of a request to draw a link by hand. */
+export interface ManualLinkInput {
+  source_entity_id: string
+  target_entity_id: string
+  relationship_type: RelationshipType
+  /** Required: an assertion nobody has to justify is not auditable. */
+  rationale: string
+}
+
+/**
+ * Relationship types an analyst may draw.
+ *
+ * Narrow on purpose. The rest name specific observations the engine made, and
+ * drawing one by hand would assert something that was never seen.
+ */
+export const ANALYST_LINKABLE_TYPES: RelationshipType[] = [
+  'POTENTIAL_SAME_IDENTITY',
+  'POTENTIAL_ALIAS',
+  'LINKS_TO',
+  'REFERENCES',
+]

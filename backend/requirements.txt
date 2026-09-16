@@ -1,16 +1,29 @@
-# Omnicient backend dependencies (Python 3.12+)
+# Omnicient backend — runtime dependencies (Python 3.12+).
+#
+# Pinned exactly, on purpose. These were `>=` constraints, which meant the
+# Docker image resolved whatever was newest on the day it was built: a rebuild
+# next month could pick up a major version and break the app without a single
+# line of this project changing. The versions below are the ones the test
+# suite actually passes against.
+#
+# Dev and test tooling lives in requirements-dev.txt so it stays out of the
+# production image.
+#
+# To move: bump here, run the suite, commit the new pin with the result.
 
-fastapi>=0.115
-uvicorn[standard]>=0.30
-pydantic>=2.7
-neo4j>=5.23
-httpx>=0.27
-beautifulsoup4>=4.12
-lxml>=5.2
-networkx>=3.3
-python-dotenv>=1.0
+fastapi==0.141.1
+uvicorn[standard]==0.52.4
+pydantic==2.13.5
+neo4j==6.3.0
+httpx==0.28.1
+beautifulsoup4==4.15.0
+lxml==6.1.3
+networkx==3.6.1
+python-dotenv==1.2.3
 
-# Development / testing
-pytest>=8.2
-pytest-asyncio>=0.23
-ruff>=0.5
+# Runtime, despite looking like tooling: the perceptual avatar hash in
+# app/utils/imagehash.py imports PIL, and the crawler calls it on every run
+# through AvatarHasher. It sat under "Development / testing" for a while,
+# which would have silently disabled avatar matching the moment anyone split
+# this file the obvious way.
+Pillow==12.3.0
