@@ -22,6 +22,9 @@ from .normalization import (
     normalize_username,
 )
 
+#: A YouTube channel id: stable, case-sensitive, and not a handle.
+CHANNEL_ID_RE = re.compile(r"UC[\w-]{20,}")
+
 # Path segments that prefix an account identifier rather than being one.
 PROFILE_PATH_PREFIXES: dict[str, tuple[str, ...]] = {
     "reddit": ("u", "user"),
@@ -42,6 +45,20 @@ PROFILE_PATH_PREFIXES: dict[str, tuple[str, ...]] = {
     "lobsters": ("u",),
     # lichess.org/@/thibault - the sigil is its own path segment here.
     "lichess": ("@",),
+}
+
+#: Reserved segments that belong to one platform rather than to every site.
+#:
+#: Kept separate from RESERVED_PATHS because that set is global: adding
+#: "music" or "live" there would refuse a perfectly good handle on GitHub. A
+#: platform's own reserved words only reserve that platform's namespace.
+PLATFORM_RESERVED_PATHS: dict[str, frozenset[str]] = {
+    "youtube": frozenset(
+        {
+            "results", "playlist", "shorts", "live", "gaming", "music",
+            "premium", "creators", "account", "oembed", "redirect",
+        }
+    ),
 }
 
 #: Platforms whose profile URLs *always* carry the prefix above.  Without this,
@@ -246,10 +263,18 @@ def parse_profile_url(url: str | None) -> tuple[str, str] | None:
         # The prefix is mandatory for this platform, so this is some other
         # kind of page - not an account.
         return None
-    elif first in RESERVED_PATHS:
+    elif first in RESERVED_PATHS or first in PLATFORM_RESERVED_PATHS.get(
+        platform, frozenset()
+    ):
         return None
     else:
         raw = segments[0]
+
+    # A YouTube channel id is not a handle: it is case-sensitive, and folding
+    # it to lowercase produces a string that resolves to nothing. Returned as
+    # observed, and the adapter builds /channel/<id> rather than /@<id> for it.
+    if platform == "youtube" and CHANNEL_ID_RE.fullmatch(raw):
+        return platform, raw
 
     try:
         return platform, normalize_username(raw.lstrip("~"))

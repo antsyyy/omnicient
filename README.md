@@ -895,18 +895,32 @@ does not.
 Measured, not assumed — each platform's robots.txt was checked against
 Omnicient's user agent, and every permitted endpoint was then probed:
 
-**24 adapters across six categories**, every one checked against its
+**25 adapters across seven categories**, every one checked against its
 robots.txt before it was written:
 
 | Category | Sources |
 | --- | --- |
 | **Developer** | GitHub, DEV, Hacker News, Hugging Face, Stack Overflow, crates.io, Docker Hub, Launchpad |
 | **Social** | Mastodon, Bluesky, Telegram, Medium (+ Instagram, Reddit, Threads, Facebook below) |
+| **Video** | YouTube |
 | **Gaming** | Steam |
 | **Music** | SoundCloud, Last.fm |
 | **Learning** | Codewars, Scratch, Duolingo |
 | **Identity** | Keybase |
 | **Web** | any site, robots permitting |
+
+YouTube is worth a note. It is the only source here whose profile page is too
+big to read whole: a channel is 1.4–2.8MB of embedded player state around a
+small Open Graph card, and the largest channels were refused outright by the
+2MB response limit. The card's tags sit at roughly 768–772KB on every channel
+measured, so the adapter reads the first megabyte and closes the connection —
+enough for the card, with headroom, and less of YouTube's bandwidth spent than
+pulling the whole document would cost. It is also the only source that
+canonicalises a handle to an opaque id (`/@veritasium` reports itself as
+`/channel/UCHnyfMqiRRG1u-2MsSQLbXA`), so the usual "is this page really the
+profile I asked for?" check is skipped for it — safe only because YouTube
+answers a handle with no channel behind it with a 404 rather than a generic
+page.
 
 Adapters declare a `SourceCategory`, so `/api/health` reports coverage grouped
 rather than as a flat list of two dozen platform names.
@@ -928,6 +942,7 @@ rather than as a flat list of two dozen platform names.
 | SoundCloud / Last.fm | ✅ | Open Graph card on the profile page |
 | Codewars / Scratch / Duolingo | ✅ | documented public JSON |
 | Telegram / Medium | ✅ | Open Graph card |
+| YouTube | ✅ | Open Graph card on the channel page — `Disallow` covers `/api/`, `/results`, `/watch_*` and `/feeds/`, not `/@handle` or `/channel/` |
 | Websites | ✅ | the page itself, robots permitting |
 | Instagram | robots off | `Disallow: /`, but the public profile parses |
 | Facebook | robots off | `Disallow: /`, but public pages parse |
