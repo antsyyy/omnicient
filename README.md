@@ -1202,7 +1202,7 @@ possible later without a migration.
 cd backend
 source .venv/bin/activate
 ./scripts/scratch-neo4j.sh start                  # a throwaway database
-NEO4J_TEST_URI=bolt://localhost:7688 pytest       # 508 tests
+NEO4J_TEST_URI=bolt://localhost:7688 pytest       # 519 tests
 ruff check .                                      # lint
 ```
 
