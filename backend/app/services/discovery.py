@@ -152,6 +152,73 @@ def discover_sources(
     return candidates
 
 
+def fanout_candidates(
+    identifier: str,
+    *,
+    platforms: Iterable[str],
+    depth: int,
+    discovered_on: str,
+    source_platform: str,
+) -> list[Candidate]:
+    """Search every source for a handle discovered mid-crawl.
+
+    The seed handle is asked of every source at the start.  A handle that
+    turns up later - a Facebook Intro linking to ``linkedin.com/in/prabhatach``
+    when the investigation began at ``prabhatacharya19`` - deserves the same
+    treatment, and is in one way a better lead: the profile published the
+    connection itself, so the handles are tied together by something the
+    person wrote rather than by them happening to look alike.
+
+    Without this the new handle is only ever tried on the one platform that
+    named it, and the accounts it holds elsewhere are never found.
+
+    What is published, and what is guessed, are different things and are kept
+    apart.  The profile published *one* link - a LinkedIn - and these
+    candidates are the handle from it tried everywhere else.  So they carry no
+    parent and no link context: an account found this way is a handle match on
+    a handle somebody else published, never a reference the profile made.
+    Recording it as one would have the graph assert that a Facebook page
+    linked to a Duolingo account it has never heard of.  Like any other
+    similarity lead, it earns nothing by existing and the correlation engine
+    still has to find real evidence for it.
+
+    These sit one hop deeper than the profile that revealed them, so the
+    depth budget still bounds how far a chain of handles can run.
+    """
+    candidates: list[Candidate] = []
+    for platform in platforms:
+        if platform in PSEUDO_PLATFORMS or platform == "website":
+            continue
+        # The platform that published the handle already has its own account
+        # for it, reached by the explicit link rather than by guessing.
+        if platform == source_platform:
+            continue
+        candidates.append(
+            Candidate(
+                entity_type=EntityType.ACCOUNT,
+                platform=platform,
+                identifier=identifier,
+                method=DiscoveryMethod.SIMILARITY,
+                reason=(
+                    f"Handle '{identifier}' was published by {discovered_on} "
+                    f"as its {source_platform} account; this is the same handle "
+                    f"looked for on {platform} - a weak lead, not evidence"
+                ),
+                depth=depth,
+                # A guess: this handle need not exist here. Unresolved
+                # guesses leave no node, so a miss never becomes graph noise.
+                drop_if_unresolved=True,
+            )
+        )
+    logger.info(
+        "handle_fanout identifier=%s discovered_on=%s platforms=%d",
+        identifier,
+        discovered_on,
+        len(candidates),
+    )
+    return candidates
+
+
 def candidates_from_profile(
     profile: ObservedProfile,
     *,

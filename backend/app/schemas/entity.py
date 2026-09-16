@@ -7,7 +7,7 @@ from typing import Any
 
 from pydantic import AliasChoices, BaseModel, ConfigDict, Field, computed_field
 
-from ..models.enums import DiscoveryMethod, EntityType
+from ..models.enums import DiscoveryMethod, EntityType, EntityVerdict
 from ..utils.normalization import platform_label
 
 
@@ -57,6 +57,10 @@ class EntityRead(BaseModel):
     is_seed: bool = False
     resolved: bool = False
 
+    analyst_verdict: EntityVerdict = EntityVerdict.UNREVIEWED
+    analyst_note: str | None = None
+    reviewed_at: datetime | None = None
+
     first_seen: datetime
     last_seen: datetime
     created_at: datetime
@@ -80,7 +84,13 @@ class EntityDetail(EntityRead):
 
 
 class EntitySummary(BaseModel):
-    """Compact entity reference embedded in relationship payloads."""
+    """Compact entity reference embedded in relationship payloads.
+
+    Carries the picture and the display name as well as the handle: every
+    list that shows an account wants to show its face, and re-fetching the
+    whole entity for each row of a results list to get one field would be
+    absurd.
+    """
 
     model_config = ConfigDict(from_attributes=True)
 
@@ -90,8 +100,26 @@ class EntitySummary(BaseModel):
     name: str
     identifier: str
     url: str | None = None
+    display_name: str | None = None
+    avatar_url: str | None = None
 
     @computed_field  # type: ignore[prop-decorator]
     @property
     def platform_name(self) -> str:
         return platform_label(self.platform)
+
+
+class EntityIdentityDecision(BaseModel):
+    """Body of a mark-as-different-identity request.
+
+    The note is where the analyst says *why* - "different city, different
+    employer, handle is a common name". Optional, and strongly worth filling
+    in: the verdict is the one identity claim this system stores, so the
+    reason for it is the only thing that makes it reviewable later.
+    """
+
+    note: str | None = Field(
+        default=None,
+        max_length=2000,
+        description="Why the analyst judged this a different party.",
+    )

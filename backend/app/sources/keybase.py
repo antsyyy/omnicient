@@ -21,7 +21,7 @@ from __future__ import annotations
 from typing import Any
 
 from ..utils.url_parser import Reference
-from .base import JsonProfileAdapter, ObservedProfile, enrich_profile
+from .base import JsonProfileAdapter, ObservedProfile, SourceCategory, enrich_profile
 
 #: Keybase ``proof_type`` -> Omnicient platform.  Types absent from this map
 #: (``dns``, ``generic_web_site``) are handled as websites instead.
@@ -43,8 +43,10 @@ class KeybaseAdapter(JsonProfileAdapter):
 
     platform = "keybase"
     name = "Keybase"
+    category = SourceCategory.IDENTITY
     api_template = "https://keybase.io/_/api/1.0/user/lookup.json?username={identifier}"
     url_template = "https://keybase.io/{identifier}"
+    probe_present = "chris"
 
     def parse_json(
         self, identifier: str, payload: Any, url: str

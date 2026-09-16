@@ -42,6 +42,37 @@ services:
       retries: 12
       start_period: 40s
 
+  # A scratch database for the test suite, so a pytest run can never land on
+  # the graph the application is using. Neo4j Community serves exactly one
+  # database per instance, so isolation means a second instance, not a second
+  # database name. It is behind a profile and does not start with the stack:
+  #
+  #   docker compose --profile test up -d neo4j-test
+  #   cd backend && NEO4J_TEST_URI=bolt://localhost:7688 pytest
+  #
+  # No volume, deliberately: the suite wipes it on every run, so persisting it
+  # across restarts would only keep the last run's leftovers.
+  neo4j-test:
+    profiles: ["test"]
+    image: neo4j:5.26-community
+    environment:
+      NEO4J_AUTH: "neo4j/${NEO4J_PASSWORD:?set NEO4J_PASSWORD in .env}"
+      NEO4J_server_memory_heap_max__size: "512m"
+      NEO4J_server_memory_pagecache_size: "256m"
+    ports:
+      - "7475:7474"
+      - "7688:7687"
+    healthcheck:
+      test:
+        [
+          "CMD-SHELL",
+          "cypher-shell -u neo4j -p \"$${NEO4J_AUTH#neo4j/}\" 'RETURN 1' || exit 1",
+        ]
+      interval: 10s
+      timeout: 10s
+      retries: 12
+      start_period: 40s
+
   backend:
     build: ./backend
     environment:
@@ -53,7 +84,7 @@ services:
       # live public sources.
       OMNICIENT_DEMO_MODE: "true"
       OMNICIENT_MAX_DEPTH: "2"
-      OMNICIENT_MAX_PAGES: "50"
+      OMNICIENT_MAX_PAGES: "150"
       OMNICIENT_REQUEST_DELAY: "1.0"
       OMNICIENT_CORS_ORIGINS: "http://localhost:5173,http://127.0.0.1:5173"
     ports:

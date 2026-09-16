@@ -28,6 +28,10 @@ from ..models.enums import (
     RelationshipType,
 )
 from ..sources.base import ObservedProfile
+
+# Imported as a module so the threshold is read when the rule runs. The
+# calibration harness sweeps it, and a by-value import would silently pin it.
+from ..utils import imagehash
 from ..utils.logging import get_logger
 from ..utils.normalization import (
     is_identifying_host,
@@ -128,7 +132,6 @@ class CorrelationEngine:
             self._username,
             self._display_name,
             self._shared_organization,
-            self._contradictory_website,
             self._contradictory_location,
             self._conflicting_email,
         ):
@@ -312,24 +315,53 @@ class CorrelationEngine:
     def _shared_avatar(
         self, source: ObservedProfile, target: ObservedProfile
     ) -> EvidenceItem | None:
-        """Same avatar image reference.
+        """The same photograph, however each platform serves it.
 
-        The MVP compares normalized image URLs, which catches the common case
-        of one image reused across platforms.  Perceptual hashing (matching
-        re-encoded or resized copies) is a natural later addition and would
-        slot in here without changing the evidence model.
+        This used to compare normalized image URLs, which meant it could
+        essentially never fire: Instagram serves a signed CDN address, GitHub
+        an ``/u/<id>`` path and Gravatar a hash of an email, so two platforms
+        never produce the same string. A rule worth twenty-five points was
+        dead in exactly the case it exists for.
+
+        It now compares perceptual hashes, which survive the re-encoding and
+        rescaling that happens when one picture is uploaded to five sites. The
+        distance is recorded on the evidence: zero is the same file, and a
+        handful of bits is the same image after a platform has processed it.
+        An analyst reading the evidence can see which they are looking at.
         """
-        first = normalize_url(source.avatar_url)
-        second = normalize_url(target.avatar_url)
-        if not first or not second or first != second:
+        # A placeholder is not somebody's face. Two accounts that both never
+        # uploaded a picture are served the same address, and reading that as
+        # evidence links strangers for having nothing in common.
+        if imagehash.looks_like_default_avatar(
+            source.avatar_url
+        ) or imagehash.looks_like_default_avatar(target.avatar_url):
             return None
+
+        first_url = normalize_url(source.avatar_url)
+        second_url = normalize_url(target.avatar_url)
+        same_address = bool(first_url and first_url == second_url)
+
+        distance = imagehash.hamming_distance(source.avatar_hash, target.avatar_hash)
+        same_image = distance is not None and distance <= imagehash.MATCH_DISTANCE
+        if not same_address and not same_image:
+            return None
+
+        if same_address:
+            detail = f"served from the same address: {first_url}"
+        elif distance == 0:
+            detail = "byte-for-byte the same picture, served from two addresses"
+        else:
+            detail = (
+                f"the same picture re-encoded by each platform "
+                f"({distance} of 64 bits differ)"
+            )
         return EvidenceItem(
             type=EvidenceType.SAME_AVATAR,
-            description=f"Both profiles use the same public avatar image: {first}",
+            description=f"Both profiles publish the same avatar - {detail}",
             weight=self.scoring.shared_avatar,
-            source_url=first,
+            source_url=first_url or source.avatar_url,
             extracted_value=source.avatar_url,
-            normalized_value=first,
+            normalized_value=source.avatar_hash or first_url,
         )
 
     @staticmethod
@@ -441,40 +473,24 @@ class CorrelationEngine:
         shared = sorted(first & second)
         if not shared:
             return None
+        # Quote the name as it was published. The comparison is lowercased,
+        # but an analyst reading "the organization 'cloudfactory'" is reading
+        # this module's working form rather than what either profile said.
+        published = next(
+            (name for name in target.organizations if name.lower() == shared[0]),
+            shared[0],
+        )
         return EvidenceItem(
             type=EvidenceType.SHARED_ORGANIZATION,
-            description=f"Both profiles reference the organization '{shared[0]}'",
+            description=f"Both profiles reference the organization '{published}'",
             weight=self.scoring.shared_organization,
             source_url=target.url,
-            extracted_value=next(
-                (name for name in target.organizations if name.lower() == shared[0]),
-                shared[0],
-            ),
+            extracted_value=published,
             normalized_value=shared[0],
         )
 
     # -- contradictions ----------------------------------------------------
 
-    def _contradictory_website(
-        self, source: ObservedProfile, target: ObservedProfile
-    ) -> EvidenceItem | None:
-        """Both profiles publish a website, and they have none in common."""
-        first = self._website_identities(source)
-        second = self._website_identities(target)
-        if not first or not second or set(first) & set(second):
-            return None
-        return EvidenceItem(
-            type=EvidenceType.CONTRADICTORY_ATTRIBUTE,
-            description=(
-                f"Different public websites: @{source.identifier} publishes "
-                f"{sorted(first)[0]}, @{target.identifier} publishes "
-                f"{sorted(second)[0]}"
-            ),
-            weight=self.scoring.contradictory_website,
-            supports=False,
-            source_url=target.url,
-            extracted_value=f"{sorted(first)[0]} vs {sorted(second)[0]}",
-        )
 
     def _contradictory_location(
         self, source: ObservedProfile, target: ObservedProfile

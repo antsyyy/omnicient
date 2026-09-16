@@ -30,22 +30,77 @@ PROFILE_PATH_PREFIXES: dict[str, tuple[str, ...]] = {
     "facebook": ("people",),
     "hackernews": ("user",),
     "bluesky": ("profile",),
+    "steam": ("id", "profiles"),
+    "scratch": ("users",),
+    "duolingo": ("profile",),
+    "lastfm": ("user",),
+    "dockerhub": ("u",),
+    "crates": ("users",),
+    "codewars": ("users",),
     "devto": (),
+    "chess": ("member",),
+    "lobsters": ("u",),
+    # lichess.org/@/thibault - the sigil is its own path segment here.
+    "lichess": ("@",),
 }
 
 #: Platforms whose profile URLs *always* carry the prefix above.  Without this,
 #: ``bsky.app/starter-pack/xyz`` reads as the account ``starter-pack`` and
 #: ``news.ycombinator.com/item?id=1`` reads as the account ``item``.
-PROFILE_PATH_REQUIRED: frozenset[str] = frozenset({"bluesky", "hackernews"})
+PROFILE_PATH_REQUIRED: frozenset[str] = frozenset(
+    {
+        "bluesky",
+        "hackernews",
+        "steam",
+        "scratch",
+        "lastfm",
+        "dockerhub",
+        "crates",
+        "chess",
+        "lobsters",
+    }
+)
+
+#: Hosts that only ever address a piece of content, never an account.
+#: ``youtu.be/ZEcV55ftyR0`` is a video; read as a profile it invents a YouTube
+#: account named after the video id, which is how a link-in-bio page full of
+#: songs became a page full of people.
+CONTENT_ONLY_HOSTS: frozenset[str] = frozenset({"youtu.be", "redd.it", "fb.me"})
+
+#: Platforms that mark a handle with a sigil instead of a path prefix.
+#:
+#: ``lobste.rs/~jcs`` is a person and ``lobste.rs/s/abc`` is a story, so the
+#: prefix cannot simply be optional - but the sigil is not a path segment
+#: either. Where a platform is listed here, a first segment carrying the sigil
+#: *is* the handle.
+PROFILE_PATH_SIGILS: dict[str, str] = {"lobsters": "~", "launchpad": "~"}
 
 #: Platforms that name the account in a query parameter rather than the path,
 #: e.g. ``news.ycombinator.com/user?id=alice``.
 PROFILE_QUERY_PARAM: dict[str, str] = {"hackernews": "id"}
 
 URL_RE = re.compile(r"https?://[^\s<>\"')\]]+", re.IGNORECASE)
+
+#: Suffixes accepted on a domain written without a scheme.
+#:
+#: Deliberately narrower than :data:`KNOWN_GTLDS`. This pattern runs over free
+#: prose - bios, profile descriptions - where a missing space after a full stop
+#: ("went home.Today was fine") would otherwise manufacture a website. The
+#: generic list is right for deciding whether a string the user typed is a
+#: domain; it is too eager for finding domains inside sentences.
+BARE_TLDS = (
+    "com|net|org|io|dev|me|co|app|xyz|info|blog|page|social|sh|ai|tech|ac"
+)
+
 BARE_DOMAIN_RE = re.compile(
     r"(?<![\w@/.])((?:[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?\.)+"
-    r"(?:com|net|org|io|dev|me|co|app|xyz|info|blog|page|social|sh|ai|tech))"
+    rf"(?:{BARE_TLDS})"
+    # A country code layered on top: co.uk, com.au, ac.uk, com.br. Without
+    # this the match stopped at "co" and "example.co.uk" was reported as
+    # "example.co" - not a harmless truncation, but a different domain that
+    # somebody else owns, which the crawler would then go and fetch.
+    r"(?:\.[a-z]{2}(?![a-z]))?"
+    r")"
     r"(/[^\s<>\"')\]]*)?",
     re.IGNORECASE,
 )
@@ -158,13 +213,24 @@ def parse_profile_url(url: str | None) -> tuple[str, str] | None:
         return None
 
     parsed = urlparse(url if "://" in url else f"https://{url}")
+    host = (parsed.netloc or "").lower().removeprefix("www.")
+    if host in CONTENT_ONLY_HOSTS:
+        return None
     segments = [segment for segment in parsed.path.split("/") if segment.strip()]
     if not segments:
         return None
 
     prefixes = PROFILE_PATH_PREFIXES.get(platform, ())
-    first = segments[0].lstrip("@").lower()
-    if first in prefixes:
+    # Sigils platforms put in front of a handle: "@alice", "~alice". The raw
+    # segment is kept too, because a site may make the sigil a segment of its
+    # own: lichess.org/@/thibault.
+    raw_first = segments[0].lower()
+    first = segments[0].lstrip("@~").lower()
+    sigil = PROFILE_PATH_SIGILS.get(platform)
+    if sigil and segments[0].startswith(sigil):
+        # The sigil marks the handle directly: lobste.rs/~jcs.
+        raw = segments[0]
+    elif first in prefixes or raw_first in prefixes:
         param = PROFILE_QUERY_PARAM.get(platform)
         if param:
             # ``news.ycombinator.com/user?id=alice``
@@ -186,7 +252,7 @@ def parse_profile_url(url: str | None) -> tuple[str, str] | None:
         raw = segments[0]
 
     try:
-        return platform, normalize_username(raw)
+        return platform, normalize_username(raw.lstrip("~"))
     except NormalizationError:
         return None
 

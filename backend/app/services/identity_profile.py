@@ -41,7 +41,9 @@ from ..schemas.profile import (
 )
 from ..utils.logging import get_logger
 from ..utils.normalization import (
+    domain_belongs_to,
     is_identifying_host,
+    name_token,
     normalize_domain,
     platform_label,
 )
@@ -209,6 +211,9 @@ class IdentityProfileService:
             )
         ]
 
+    #: How many websites the profile shows before it stops being a summary.
+    WEBSITE_LIMIT = 12
+
     def _websites(self, entities: list[Entity]) -> list[ObservedValue]:
         """Sites the subject published - not the platforms they published on.
 
@@ -216,6 +221,12 @@ class IdentityProfileService:
         platforms; listing the host again as a "public website" is noise. Link
         shorteners and mailbox providers are excluded for the same reason they
         earn no correlation score: everybody links to them.
+
+        Ordered by whether the domain is named after the subject, then by how
+        *few* accounts published it. The default "most corroborated first" is
+        right for an email address and exactly wrong for a website: a domain
+        twenty-eight accounts link to is an employer or a platform, and it was
+        pushing the subject's own site down a list of three hundred.
         """
 
         def personal(url: str | None) -> str | None:
@@ -243,7 +254,22 @@ class IdentityProfileService:
                 if domain:
                     yield domain, url
 
-        return self._collect(entities, values)
+        tokens = {
+            name_token(value)
+            for entity in entities
+            if entity.depth == 0 or entity.is_seed
+            for value in (entity.identifier, entity.display_name)
+            if value and len(name_token(value)) >= 4
+        }
+        collected = self._collect(entities, values)
+        collected.sort(
+            key=lambda observed: (
+                not domain_belongs_to(observed.value, tokens),
+                len(observed.entity_ids),
+                observed.value,
+            )
+        )
+        return collected[: self.WEBSITE_LIMIT]
 
     def _emails(self, entities: list[Entity]) -> list[ObservedValue]:
         def values(entity: Entity):

@@ -34,6 +34,34 @@ PLATFORM_HOSTS: dict[str, tuple[str, ...]] = {
     "hackernews": ("news.ycombinator.com",),
     "pypi": ("pypi.org",),
     "telegram": ("t.me", "telegram.me"),
+    "huggingface": ("huggingface.co",),
+    "crates": ("crates.io",),
+    "dockerhub": ("hub.docker.com",),
+    "stackoverflow": ("stackoverflow.com", "stackexchange.com"),
+    "launchpad": ("launchpad.net",),
+    "steam": ("steamcommunity.com",),
+    "soundcloud": ("soundcloud.com",),
+    "lastfm": ("last.fm", "lastfm.com"),
+    "codewars": ("codewars.com",),
+    "scratch": ("scratch.mit.edu",),
+    "duolingo": ("duolingo.com",),
+    "medium": ("medium.com",),
+    # Link-in-bio pages: a whole page of somebody's other accounts.
+    "linktree": ("linktr.ee", "linktree.com"),
+    "solo": ("solo.to",),
+    "biolink": ("bio.link",),
+    "gravatar": ("gravatar.com", "en.gravatar.com"),
+    "chess": ("chess.com",),
+    "lobsters": ("lobste.rs",),
+    # No adapter reads these - they wall off anonymous access - but a link to
+    # one is still a lead worth putting on the board as an unread reference.
+    "twitch": ("twitch.tv", "m.twitch.tv"),
+    "tiktok": ("tiktok.com",),
+    "codeberg": ("codeberg.org",),
+    "lichess": ("lichess.org",),
+    "mixcloud": ("mixcloud.com",),
+    "aboutme": ("about.me",),
+    "microblog": ("micro.blog",),
 }
 
 # Alternative spellings analysts (and profile pages) actually use.
@@ -58,6 +86,13 @@ PLATFORM_ALIASES: dict[str, str] = {
     "ycombinator": "hackernews",
     "kb": "keybase",
     "tg": "telegram",
+    "hf": "huggingface",
+    "so": "stackoverflow",
+    "stackexchange": "stackoverflow",
+    "docker": "dockerhub",
+    "sc": "soundcloud",
+    "last.fm": "lastfm",
+    "lastfm.com": "lastfm",
 }
 
 # Human-readable labels for the UI and evidence descriptions.
@@ -77,6 +112,31 @@ PLATFORM_LABELS: dict[str, str] = {
     "hackernews": "Hacker News",
     "pypi": "PyPI",
     "telegram": "Telegram",
+    "huggingface": "Hugging Face",
+    "crates": "crates.io",
+    "dockerhub": "Docker Hub",
+    "stackoverflow": "Stack Overflow",
+    "launchpad": "Launchpad",
+    "steam": "Steam",
+    "soundcloud": "SoundCloud",
+    "lastfm": "Last.fm",
+    "codewars": "Codewars",
+    "scratch": "Scratch",
+    "duolingo": "Duolingo",
+    "medium": "Medium",
+    "linktree": "Linktree",
+    "solo": "solo.to",
+    "biolink": "bio.link",
+    "gravatar": "Gravatar",
+    "chess": "Chess.com",
+    "lobsters": "Lobsters",
+    "twitch": "Twitch",
+    "tiktok": "TikTok",
+    "codeberg": "Codeberg",
+    "lichess": "Lichess",
+    "mixcloud": "Mixcloud",
+    "aboutme": "about.me",
+    "microblog": "Micro.blog",
     "username": "Username",
     "organization": "Organization",
     "website": "Website",
@@ -106,6 +166,49 @@ TRACKING_PARAMS: frozenset[str] = frozenset(
 )
 
 USERNAME_RE = re.compile(r"^[A-Za-z0-9._\-]{1,64}$")
+
+#: Generic top-level domains common enough to be worth recognising by name.
+#:
+#: Every country-code TLD is exactly two letters, so those are matched by
+#: length instead of being listed. The point of the set is to tell a domain
+#: from a dotted handle: "alice.dev" is a site, "firstname.lastname" is a
+#: person's handle, and the only thing separating them is whether the last
+#: label is a real TLD.
+KNOWN_GTLDS: frozenset[str] = frozenset(
+    {
+        "com", "net", "org", "edu", "gov", "mil", "int", "info", "biz",
+        "name", "pro", "mobi", "asia", "tel", "xxx", "aero", "coop", "jobs",
+        "museum", "travel", "cat", "post",
+        # Newer generics people actually use for personal sites.
+        "app", "art", "bio", "blog", "cloud", "club", "codes", "dev", "digital",
+        "design", "email", "fyi", "games", "gg", "guru", "host", "icu", "ink",
+        "io", "link", "live", "ltd", "media", "network", "news", "ninja",
+        "online", "page", "photo", "photography", "pics", "press", "pub",
+        "rocks", "run", "shop", "show", "site", "social", "software", "space",
+        "store", "studio", "style", "tech", "today", "tools", "top", "tv",
+        "wiki", "work", "works", "world", "wtf", "xyz", "zone",
+    }
+)
+
+
+def looks_like_domain(value: str | None) -> bool:
+    """Whether a dotted string is a hostname rather than a handle.
+
+    ``alice.dev`` is a domain; ``firstname.lastname`` is a username that
+    happens to contain a dot. Treating every dotted string as a hostname sends
+    the crawler looking for a site that does not exist and loses the account
+    that does.
+    """
+    if not value:
+        return False
+    labels = value.strip().strip(".").lower().split(".")
+    if len(labels) < 2 or not all(labels):
+        return False
+    if not all(re.fullmatch(r"[a-z0-9](?:[a-z0-9-]*[a-z0-9])?", part) for part in labels):
+        return False
+    tld = labels[-1]
+    # Two letters is a country code; anything longer has to be a known generic.
+    return (len(tld) == 2 and tld.isalpha()) or tld in KNOWN_GTLDS
 
 # Schemes that are never fetchable web pages.
 NON_WEB_SCHEMES = (
@@ -174,8 +277,11 @@ def normalize_username(value: str | None) -> str:
 
     candidate = candidate.strip().strip("/").lstrip("@").strip()
     candidate = candidate.split("?", 1)[0].split("#", 1)[0]
-    # Separators are meaningful inside a handle but never at its edges.
-    candidate = candidate.strip("._-").lower()
+    # A trailing dot or hyphen is punctuation picked up during extraction
+    # ("Threads: @alice_dev." -> "alice_dev"). An underscore is not: "_alice"
+    # and "alice_" are handles in their own right on most platforms, and
+    # stripping one silently queries a different account.
+    candidate = candidate.strip(".-").lower()
 
     if not USERNAME_RE.match(candidate):
         raise NormalizationError(f"invalid identifier: {value!r}")
@@ -427,4 +533,65 @@ def is_identifying_host(value: str | None) -> bool:
     # A subdomain of a generic host is just as generic: sites.google.com/x.
     return not any(
         domain.endswith(f".{host}") for host in NON_IDENTIFYING_HOSTS
+    )
+
+
+def identity_key(identifier: str | None) -> str:
+    """The form two observations of the same thing must agree on.
+
+    Handles are case-insensitive on every platform in the catalogue:
+    ``PrashantRanjitkar`` and ``prashantranjitkar`` are one Instagram account,
+    not two.  Keying entities on the raw identifier recorded them separately,
+    which split one account into two nodes, doubled its relationships and made
+    the same person look like a pair of matching strangers.
+
+    Domains are case-insensitive by definition, and website identities are
+    already lowercased upstream by ``website_identity``, so folding is correct
+    for every identifier that currently reaches an entity.  Email local parts
+    are case-sensitive in the RFC and insensitive in practice at every real
+    provider; folding matches what an investigator means.
+
+    If a source is ever added whose identifiers genuinely are case-sensitive,
+    this is the single place that has to learn about it.
+    """
+    return (identifier or "").strip().casefold()
+
+
+def name_token(value: str | None) -> str:
+    """A name flattened for comparison: letters and digits only.
+
+    ``beau.lebens``, ``beau_lebens`` and ``BeauLebens`` all become
+    ``beaulebens``, so a handle written three ways compares equal.
+    """
+    return re.sub(r"[^a-z0-9]", "", (value or "").lower())
+
+
+def domain_belongs_to(domain: str | None, tokens: set[str]) -> bool:
+    """Whether a domain is named after one of these identities.
+
+    ``beaulebens.com`` beside an account called ``beaulebens`` is that
+    person's own site; ``businessinsider.com`` beside the same account is a
+    story they linked to. Offline, nothing else separates the two, and the
+    difference decides whether a shared link means anything at all.
+
+    Matched on the first label, exactly, except for a trailing run of digits
+    on either side - ``alice.dev`` is the personal site of ``alice_98``, and
+    a number stuck on the end of a handle is the commonest way somebody
+    writes the same name twice.
+
+    Anything looser fails badly.  Substring matching in either direction
+    reads as the obvious generalisation, but given a few dozen discovered
+    handles some token is a substring of nearly any domain, and the rule ends
+    up announcing that ``apps.apple.com`` is somebody's personal site.
+    """
+    flat = name_token((domain or "").split(".")[0])
+    # Two or three characters match far too much to mean anything.
+    if len(flat) < 4:
+        return False
+    if flat in tokens:
+        return True
+    return any(
+        (token.startswith(flat) and token[len(flat) :].isdigit())
+        or (flat.startswith(token) and flat[len(token) :].isdigit() and len(token) >= 4)
+        for token in tokens
     )

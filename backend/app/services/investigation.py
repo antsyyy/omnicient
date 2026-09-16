@@ -38,10 +38,12 @@ from ..schemas.investigation import (
     SourceIssue,
 )
 from ..sources import SourceRegistry, build_registry
+from ..sources.base import SafeFetcher
 from ..utils.identifier import detect_identifier
 from ..utils.logging import get_logger
 from ..utils.normalization import platform_label
 from .alias_detection import AliasCandidate, AliasDetector, normalize_alias_candidate
+from .avatars import AvatarHasher
 from .correlation import CorrelationEngine, CorrelationResult
 from .crawler import Crawler, CrawlOutcome, ObservedEntity
 
@@ -172,12 +174,30 @@ class InvestigationService:
         )
 
         registry = self._registry(investigation)
+        # Written out as the crawl goes, so an analyst sees accounts appear
+        # rather than a spinner. Events are CREATE-only, so the number already
+        # written is tracked; entities are a MERGE and can simply be
+        # re-persisted.
+        written_events = 0
+
+        async def publish(partial: CrawlOutcome) -> None:
+            nonlocal written_events
+            self._record_events(investigation, partial, offset=written_events)
+            written_events = len(partial.events)
+            self._persist_entities(investigation, partial, record_history=False)
+            entities, relationships, evidence = self.counts(investigation.id)
+            investigation.entity_count = entities
+            investigation.relationship_count = relationships
+            investigation.evidence_count = evidence
+            self.repo.save_investigation(investigation)
+
         try:
             outcome = await Crawler(registry, self.settings).crawl(
                 investigation.seed_platform,
                 investigation.seed_identifier,
                 max_depth=investigation.max_depth,
                 max_pages=investigation.max_pages,
+                on_level=publish,
             )
         except Exception as exc:  # noqa: BLE001 - surfaced, never crashes the app
             logger.exception("crawl_failed investigation=%s", investigation.id)
@@ -194,9 +214,12 @@ class InvestigationService:
         finally:
             await registry.aclose()
 
-        # The crawler buffers its timeline in memory; write it out before the
-        # analysis events so the activity log stays chronological.
-        self._record_events(investigation, outcome)
+        # Whatever the last level did not already flush.
+        self._record_events(investigation, outcome, offset=written_events)
+
+        # Between the crawl and the engine: the avatar comparison needs a
+        # perceptual hash on each profile, and the engine reads profiles.
+        await self._hash_avatars(investigation, outcome)
 
         entity_map = self._persist_entities(investigation, outcome)
         evidence_count = self._persist_links(investigation, outcome, entity_map)
@@ -342,18 +365,60 @@ class InvestigationService:
             return build_demo_registry()
         return build_registry(self.settings)
 
+    async def _hash_avatars(
+        self, investigation: Investigation, outcome: CrawlOutcome
+    ) -> None:
+        """Reduce every avatar found to a hash the engine can compare.
+
+        Best effort throughout. An avatar that will not download or will not
+        decode costs one observation; it must never cost the investigation,
+        so nothing here is allowed to raise.
+        """
+        if investigation.demo:
+            # The demo dataset has no real images behind its avatar URLs.
+            return
+        fetcher = SafeFetcher(self.settings)
+        try:
+            hashed = await AvatarHasher(fetcher, self.settings).apply(
+                outcome.profiles
+            )
+        except Exception:  # noqa: BLE001 - a failed hash is not a failed crawl
+            logger.warning("avatar_hashing_failed", exc_info=True)
+            return
+        finally:
+            await fetcher.aclose()
+
+        if hashed:
+            self._event(
+                investigation,
+                "avatars_hashed",
+                f"{hashed} avatars fingerprinted for cross-platform comparison",
+                data={"avatars": hashed},
+            )
+
     # -- persistence -------------------------------------------------------
 
     def _persist_entities(
-        self, investigation: Investigation, outcome: CrawlOutcome
+        self,
+        investigation: Investigation,
+        outcome: CrawlOutcome,
+        *,
+        record_history: bool = True,
     ) -> dict[tuple[str, str, str], Entity]:
-        """Store observed entities and write a snapshot for each observation."""
+        """Store observed entities and write a snapshot for each observation.
+
+        ``record_history`` is false while the crawl is still running. The
+        nodes themselves are a MERGE and can be written after every level
+        safely, but a snapshot is one observation and the timeline entry is
+        one line: writing either once per level would record the same
+        observation several times and repeat itself in the activity log.
+        """
         stored: dict[tuple[str, str, str], Entity] = {}
         snapshots: list[Snapshot] = []
         for observed in outcome.entities.values():
             entity = self._upsert_entity(investigation, observed)
             stored[observed.key] = entity
-            if observed.profile is not None:
+            if record_history and observed.profile is not None:
                 snapshots.append(
                     Snapshot(
                         entity_id=entity.id,
@@ -365,6 +430,9 @@ class InvestigationService:
                         meta={"source": observed.profile.source or observed.platform},
                     )
                 )
+        if not record_history:
+            return stored
+
         self.repo.add_snapshots(snapshots)
         self._event(
             investigation,
@@ -620,9 +688,14 @@ class InvestigationService:
         )
 
     def _record_events(
-        self, investigation: Investigation, outcome: CrawlOutcome
+        self, investigation: Investigation, outcome: CrawlOutcome, offset: int = 0
     ) -> None:
-        """Persist the crawler's buffered timeline in one round trip."""
+        """Persist the crawler's buffered timeline in one round trip.
+
+        ``offset`` skips the records already written by an earlier flush;
+        events are created rather than merged, so writing the whole buffer
+        again would duplicate the timeline.
+        """
         self.repo.add_events(
             [
                 CrawlEvent(
@@ -632,7 +705,7 @@ class InvestigationService:
                     level=record.level,
                     data=record.data,
                 )
-                for record in outcome.events
+                for record in outcome.events[offset:]
             ]
         )
 
@@ -723,6 +796,11 @@ class InvestigationService:
         and its evidence collapsed into two columns.  A relationship with no
         evidence would be a claim without a reason, so the supporting and
         contradicting columns are always written even when empty.
+
+        ``origin`` says whether the engine derived the row from observations
+        or an analyst drew it by hand.  Whoever reads this file will not have
+        the interface in front of them to tell the two apart, and they carry
+        very different warrant, so the distinction has to travel with the data.
         """
         import csv
         import io
@@ -746,6 +824,7 @@ class InvestigationService:
                 "target_platform",
                 "target_identifier",
                 "relationship_type",
+                "origin",
                 "score",
                 "confidence",
                 "analyst_status",
@@ -776,6 +855,7 @@ class InvestigationService:
                     target.platform if target else "",
                     target.identifier if target else "",
                     relationship.relationship_type,
+                    relationship.origin,
                     f"{relationship.confidence_score:g}",
                     relationship.confidence_level,
                     relationship.analyst_status,

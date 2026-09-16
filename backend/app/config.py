@@ -79,7 +79,12 @@ class ScoringConfig:
     shared_organization: int = 5
 
     contradictory_location: int = -15
-    contradictory_website: int = -20
+    # No weight for "these profiles publish different websites": measured
+    # against the labelled pairs it fired on three known-same pairs and two
+    # known-different ones, which is worse than useless - it was subtracting
+    # twenty points from the very pairs it should have supported. One person
+    # listing their blog on GitHub and their shop on Instagram is ordinary,
+    # not a contradiction. Removing it took F1 from 0.67 to 0.93.
     metadata_conflict: int = -20
 
     # Confidence bands: (inclusive lower bound, label).  Ordered high to low.
@@ -166,14 +171,50 @@ class Settings:
         default_factory=lambda: _env_int("OMNICIENT_PATH_RESULT_CEILING", 25)
     )
 
+    #: Sources fetched at once within one crawl level.  A fan-out across two
+    #: dozen different hosts has no reason to be sequential; the per-host
+    #: delay still serialises repeat requests to any single service.
+    crawl_concurrency: int = field(
+        default_factory=lambda: _env_int("OMNICIENT_CRAWL_CONCURRENCY", 10)
+    )
+
     # Crawler budget (section 15 of the specification).
     max_depth: int = field(default_factory=lambda: _env_int("OMNICIENT_MAX_DEPTH", 2))
-    max_pages: int = field(default_factory=lambda: _env_int("OMNICIENT_MAX_PAGES", 50))
+    #: Raised from 50 when the catalogue grew to two dozen sources: a bare
+    #: username fans out to 23 lookups before a single reference is followed,
+    #: so the old budget truncated every such crawl - and which lookups
+    #: survived depended on queue order rather than on relevance.
+    max_pages: int = field(default_factory=lambda: _env_int("OMNICIENT_MAX_PAGES", 150))
+    #: How many *newly discovered* handles may themselves be searched across
+    #: the whole catalogue.
+    #:
+    #: When a profile publishes a link to an account under a different handle
+    #: - a Facebook Intro naming a LinkedIn that reads /in/prabhatach when the
+    #: seed was prabhatacharya19 - that handle is the strongest lead an
+    #: investigation gets, because the person published the connection
+    #: themselves. Searching it everywhere is the point of following it.
+    #:
+    #: Bounded because each one costs a full fan-out, and a chain of them
+    #: would multiply. Three keeps a crawl inside its page budget while still
+    #: following the leads that matter.
+    max_fanout_handles: int = field(
+        default_factory=lambda: _env_int("OMNICIENT_MAX_FANOUT_HANDLES", 3)
+    )
     request_timeout: float = field(
         default_factory=lambda: _env_float("OMNICIENT_REQUEST_TIMEOUT", 10.0)
     )
     request_delay: float = field(
         default_factory=lambda: _env_float("OMNICIENT_REQUEST_DELAY", 1.0)
+    )
+    #: Ceiling on a fetched avatar. A profile picture larger than this is
+    #: not a profile picture, and the hash only needs a thumbnail anyway.
+    max_image_bytes: int = field(
+        default_factory=lambda: _env_int("OMNICIENT_MAX_IMAGE_BYTES", 1_500_000)
+    )
+    #: How many avatars one crawl may fetch. Each is an extra request, so the
+    #: budget is separate from the page budget and deliberately modest.
+    max_avatar_fetches: int = field(
+        default_factory=lambda: _env_int("OMNICIENT_MAX_AVATAR_FETCHES", 40)
     )
     max_response_bytes: int = field(
         default_factory=lambda: _env_int("OMNICIENT_MAX_RESPONSE_BYTES", 2_000_000)
@@ -195,6 +236,33 @@ class Settings:
             "+https://github.com/omnicient)",
         )
     )
+
+    #: How long a fetched page may be reused before it is asked for again.
+    #:
+    #: Re-running a crawl re-reads the same profiles. Serving those from the
+    #: last response - and revalidating with the ETag the platform gave us
+    #: rather than re-downloading - is the difference between a demo that
+    #: works twice and one that spends its quota on the first run.
+    cache_ttl_seconds: int = field(
+        default_factory=lambda: _env_int("OMNICIENT_CACHE_TTL", 900)
+    )
+    cache_max_entries: int = field(
+        default_factory=lambda: _env_int("OMNICIENT_CACHE_MAX_ENTRIES", 500)
+    )
+
+    def token_for(self, platform: str) -> str:
+        """An API credential the operator supplied for one platform.
+
+        Read from ``OMNICIENT_TOKEN_<PLATFORM>``, e.g.
+        ``OMNICIENT_TOKEN_GITHUB``. These are the operator's own credentials,
+        used the way each platform documents: GitHub raises an authenticated
+        caller from 60 requests an hour to 5,000, which is the supported
+        answer to running out of quota rather than a way around the limit.
+
+        Never logged, never exported, never attached to a host the adapter
+        did not ask for.
+        """
+        return _env_str(f"OMNICIENT_TOKEN_{platform.upper()}", "").strip()
 
     # Live crawling is opt-in: the shipped default is the offline demo dataset.
     demo_mode: bool = field(

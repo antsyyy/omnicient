@@ -52,6 +52,7 @@ class InstagramAdapter(OpenGraphProfileAdapter):
     platform = "instagram"
     name = "Instagram"
     url_template = "https://www.instagram.com/{identifier}/"
+    probe_present = "instagram"
 
     def extract_display_name(self, title: str) -> str | None:
         match = TITLE_RE.match(title)

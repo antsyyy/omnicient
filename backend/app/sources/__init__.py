@@ -11,6 +11,7 @@ from __future__ import annotations
 
 from ..config import Settings, get_settings
 from ..utils.logging import get_logger
+from .aggregators import BioLinkAdapter, LinktreeAdapter, SoloToAdapter
 from .base import (
     FailureReason,
     JsonProfileAdapter,
@@ -19,16 +20,34 @@ from .base import (
     OpenGraphProfileAdapter,
     SafeFetcher,
     SourceAdapter,
+    SourceCategory,
     SourceError,
+    XmlProfileAdapter,
 )
 from .bluesky import BlueskyAdapter
+from .dev import (
+    CodebergAdapter,
+    CratesIoAdapter,
+    DockerHubAdapter,
+    HackerNewsAdapter,
+    HuggingFaceAdapter,
+    LaunchpadAdapter,
+    LobstersAdapter,
+    StackOverflowAdapter,
+)
 from .devto import DevToAdapter
 from .facebook import FacebookAdapter
+from .gaming import ChessComAdapter, LichessAdapter, SteamAdapter
 from .github import GitHubAdapter
+from .gravatar import GravatarAdapter
+from .identity_sites import AboutMeAdapter, MicroBlogAdapter
 from .instagram import InstagramAdapter
 from .keybase import KeybaseAdapter
+from .learning import CodewarsAdapter, DuolingoAdapter, ScratchAdapter
 from .mastodon import MastodonAdapter
+from .music import LastFmAdapter, MixcloudAdapter, SoundCloudAdapter
 from .reddit import RedditAdapter
+from .social import MediumAdapter, TelegramAdapter
 from .threads import ThreadsAdapter
 from .website import WebsiteAdapter
 
@@ -38,12 +57,46 @@ logger = get_logger(__name__)
 #: Mastodon, GitLab) are registered here and nowhere else.
 ADAPTER_CLASSES: tuple[type[SourceAdapter], ...] = (
     # Sources whose robots.txt permits anonymous lookups, so they work live.
-    GitHubAdapter,
+    # Identity and general web.
     KeybaseAdapter,
+    GravatarAdapter,
+    AboutMeAdapter,
+    WebsiteAdapter,
+    # Link-in-bio pages. The single most productive source an identity
+    # investigation has: a page whose whole purpose is to list its owner's
+    # accounts, published by them.
+    LinktreeAdapter,
+    SoloToAdapter,
+    BioLinkAdapter,
+    # Developer platforms.
+    GitHubAdapter,
+    DevToAdapter,
+    HackerNewsAdapter,
+    HuggingFaceAdapter,
+    StackOverflowAdapter,
+    CratesIoAdapter,
+    DockerHubAdapter,
+    LaunchpadAdapter,
+    LobstersAdapter,
+    CodebergAdapter,
+    # Social.
     MastodonAdapter,
     BlueskyAdapter,
-    DevToAdapter,
-    WebsiteAdapter,
+    TelegramAdapter,
+    MediumAdapter,
+    MicroBlogAdapter,
+    # Gaming.
+    SteamAdapter,
+    ChessComAdapter,
+    LichessAdapter,
+    # Music.
+    SoundCloudAdapter,
+    LastFmAdapter,
+    MixcloudAdapter,
+    # Learning.
+    CodewarsAdapter,
+    ScratchAdapter,
+    DuolingoAdapter,
     # Sources that publish "Disallow: /" for everything.  Kept registered so a
     # discovered link still becomes a node and the refusal is reported, rather
     # than the platform silently vanishing from the investigation.
@@ -95,8 +148,35 @@ def build_registry(
     return registry
 
 
+#: Adapters grouped by the kind of site they read, for the health endpoint
+#: and anything else that wants to describe coverage rather than list it.
+def adapters_by_category() -> dict[str, list[str]]:
+    """``{"dev": ["github", "devto", ...], ...}`` across registered adapters."""
+    grouped: dict[str, list[str]] = {}
+    for adapter in ADAPTER_CLASSES:
+        grouped.setdefault(str(adapter.category), []).append(adapter.platform)
+    return {key: sorted(value) for key, value in sorted(grouped.items())}
+
+
 __all__ = [
     "ADAPTER_CLASSES",
+    "CodewarsAdapter",
+    "CratesIoAdapter",
+    "DockerHubAdapter",
+    "DuolingoAdapter",
+    "HackerNewsAdapter",
+    "HuggingFaceAdapter",
+    "LastFmAdapter",
+    "LaunchpadAdapter",
+    "MediumAdapter",
+    "ScratchAdapter",
+    "SoundCloudAdapter",
+    "SourceCategory",
+    "StackOverflowAdapter",
+    "SteamAdapter",
+    "TelegramAdapter",
+    "XmlProfileAdapter",
+    "adapters_by_category",
     "BlueskyAdapter",
     "DevToAdapter",
     "FacebookAdapter",

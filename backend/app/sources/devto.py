@@ -12,7 +12,7 @@ from __future__ import annotations
 from typing import Any
 
 from ..utils.url_parser import Reference
-from .base import JsonProfileAdapter, ObservedProfile, enrich_profile
+from .base import JsonProfileAdapter, ObservedProfile, SourceCategory, enrich_profile
 
 #: dev.to profile field -> Omnicient platform.
 LINKED_ACCOUNT_FIELDS: dict[str, str] = {
@@ -26,8 +26,10 @@ class DevToAdapter(JsonProfileAdapter):
 
     platform = "devto"
     name = "DEV"
+    category = SourceCategory.DEV
     api_template = "https://dev.to/api/users/by_username?url={identifier}"
     url_template = "https://dev.to/{identifier}"
+    probe_present = "ben"
 
     def parse_json(
         self, identifier: str, payload: Any, url: str

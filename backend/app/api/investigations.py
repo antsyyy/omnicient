@@ -26,13 +26,16 @@ from ..schemas.investigation import (
 from ..schemas.lead import LeadList
 from ..schemas.path import PathResponse
 from ..schemas.profile import IdentityProfile
-from ..schemas.relationship import RelationshipRead
+from ..schemas.relationship import ManualLinkCreate, RelationshipRead
+from ..schemas.results import SourceResults
 from ..services.alias_service import AliasService
 from ..services.graph import GraphService
 from ..services.identity_profile import IdentityProfileService
 from ..services.investigation import InvestigationService
 from ..services.leads import LeadService
+from ..services.links import LinkError, LinkService
 from ..services.paths import PathNotFoundError, PathService
+from ..services.results import ResultsService
 from ..utils.logging import get_logger
 from ..utils.normalization import NormalizationError
 
@@ -94,7 +97,7 @@ def create_investigation(
 @router.get("", response_model=list[InvestigationRead], summary="List investigations")
 def list_investigations(
     repo: Neo4jRepository = Depends(get_repository),
-    limit: int = Query(default=50, ge=1, le=200),
+    limit: int = Query(default=15, ge=1, le=200),
     offset: int = Query(default=0, ge=0),
 ) -> list[InvestigationRead]:
     """Most recent investigations first, with their headline counts."""
@@ -208,6 +211,55 @@ def list_relationships(
     ]
 
 
+@router.post(
+    "/{investigation_id}/links",
+    response_model=RelationshipRead,
+    status_code=201,
+    summary="Draw a link by hand",
+)
+def create_link(
+    investigation_id: str,
+    request: ManualLinkCreate,
+    repo: Neo4jRepository = Depends(get_repository),
+) -> RelationshipRead:
+    """Record a connection an analyst asserts between two entities.
+
+    Investigators know things the crawler cannot reach. This records that
+    knowledge inside the investigation, where it can be audited, rather than
+    leaving it in someone's notes - but it is stamped as analyst-asserted,
+    scores nothing, and requires a stated reason, because it rests on a
+    person's judgement rather than on anything observed.
+    """
+    investigation = _get_investigation(repo, investigation_id)
+    try:
+        relationship = LinkService(repo).create(investigation, request)
+    except LinkError as error:
+        raise HTTPException(
+            status_code=409 if error.conflict else 400, detail=error.message
+        ) from error
+    return RelationshipRead.model_validate(
+        repo.attach_evidence([relationship])[0]
+    )
+
+
+@router.get(
+    "/{investigation_id}/results",
+    response_model=SourceResults,
+    summary="What each source yielded",
+)
+def read_results(
+    investigation_id: str, repo: Neo4jRepository = Depends(get_repository)
+) -> SourceResults:
+    """One row per source: found, nothing found, or unavailable.
+
+    The graph cannot express the difference between a source that was
+    searched and came back empty and one that refused to be searched - both
+    are simply absent from it. This is where that distinction lives.
+    """
+    investigation = _get_investigation(repo, investigation_id)
+    return ResultsService(repo).build(investigation)
+
+
 @router.get(
     "/{investigation_id}/profile",
     response_model=IdentityProfile,
@@ -251,7 +303,7 @@ def list_aliases(
 def list_leads(
     investigation_id: str,
     repo: Neo4jRepository = Depends(get_repository),
-    limit: int = Query(default=50, ge=1, le=200),
+    limit: int = Query(default=15, ge=1, le=200),
 ) -> LeadList:
     """What is worth looking at next, derived from evidence already collected.
 

@@ -1,0 +1,369 @@
+{
+ "description": "Labelled identity pairs for calibrating the correlation model. Profiles are referenced by key into profiles.json, which holds exactly what the project's own adapters observed on a real public page. Every 'same' label cites a connection the account owner published themselves - a Gravatar verified account, a Keybase proof, a website named on a profile - because a label derived from a matching name or photograph would be the signal under test. Pairs marked 'indirect' are the valuable ones: neither profile links to the other, so the model has to recover the connection rather than read it. Negative pairs are chosen deliberately, and the hard ones share a handle, an employer or a community with the party they are not.",
+ "pairs": [
+  {
+   "a": "gravatar:beau",
+   "b": "github:beaulebens",
+   "basis": "Gravatar lists github/beaulebens among its owner-verified accounts",
+   "name": "gravatar:beau <-> github:beaulebens",
+   "same": true
+  },
+  {
+   "a": "gravatar:beau",
+   "b": "instagram:beaulebens",
+   "basis": "Gravatar lists instagram/beaulebens among its owner-verified accounts",
+   "name": "gravatar:beau <-> instagram:beaulebens",
+   "same": true
+  },
+  {
+   "a": "keybase:beaulebens",
+   "b": "github:beaulebens",
+   "basis": "Keybase publishes a cryptographic proof for github/beaulebens",
+   "name": "keybase:beaulebens <-> github:beaulebens",
+   "same": true
+  },
+  {
+   "a": "github:beaulebens",
+   "b": "instagram:beaulebens",
+   "basis": "indirect: both verified by the same Gravatar profile, neither links to the other",
+   "name": "github:beaulebens <-> instagram:beaulebens",
+   "same": true
+  },
+  {
+   "a": "keybase:beaulebens",
+   "b": "instagram:beaulebens",
+   "basis": "indirect: Keybase and Gravatar resolve to one party who verified both",
+   "name": "keybase:beaulebens <-> instagram:beaulebens",
+   "same": true
+  },
+  {
+   "a": "gravatar:beau",
+   "b": "keybase:beaulebens",
+   "basis": "both declare the same github and x accounts as their own",
+   "name": "gravatar:beau <-> keybase:beaulebens",
+   "same": true
+  },
+  {
+   "a": "linktree:github",
+   "b": "instagram:github",
+   "basis": "the Linktree page lists instagram/github",
+   "name": "linktree:github <-> instagram:github",
+   "same": true
+  },
+  {
+   "a": "github:simonw",
+   "b": "website:simonwillison.net",
+   "basis": "the GitHub profile publishes simonwillison.net as its website",
+   "name": "github:simonw <-> website:simonwillison.net",
+   "same": true
+  },
+  {
+   "a": "bluesky:simonwillison.net",
+   "b": "website:simonwillison.net",
+   "basis": "the Bluesky profile publishes simonwillison.net, and the handle is the domain",
+   "name": "bluesky:simonwillison.net <-> website:simonwillison.net",
+   "same": true
+  },
+  {
+   "a": "github:simonw",
+   "b": "bluesky:simonwillison.net",
+   "basis": "indirect: both declare simonwillison.net; the handles differ, so nothing on either page names the other",
+   "name": "github:simonw <-> bluesky:simonwillison.net",
+   "same": true
+  },
+  {
+   "a": "github:zachleat",
+   "b": "website:zachleat.com",
+   "basis": "zachleat.com links to github/zachleat and the GitHub profile links back",
+   "name": "github:zachleat <-> website:zachleat.com",
+   "same": true
+  },
+  {
+   "a": "bluesky:zachleat.com",
+   "b": "website:zachleat.com",
+   "basis": "zachleat.com links to the Bluesky profile, which publishes the domain",
+   "name": "bluesky:zachleat.com <-> website:zachleat.com",
+   "same": true
+  },
+  {
+   "a": "github:zachleat",
+   "b": "bluesky:zachleat.com",
+   "basis": "indirect: tied through zachleat.com, which declares both",
+   "name": "github:zachleat <-> bluesky:zachleat.com",
+   "same": true
+  },
+  {
+   "a": "github:mitsuhiko",
+   "b": "website:lucumr.pocoo.org",
+   "basis": "the GitHub profile publishes lucumr.pocoo.org as its website",
+   "name": "github:mitsuhiko <-> website:lucumr.pocoo.org",
+   "same": true
+  },
+  {
+   "a": "bluesky:mitsuhiko.at",
+   "b": "website:lucumr.pocoo.org",
+   "basis": "the Bluesky profile publishes the same site",
+   "name": "bluesky:mitsuhiko.at <-> website:lucumr.pocoo.org",
+   "same": true
+  },
+  {
+   "a": "github:mitsuhiko",
+   "b": "bluesky:mitsuhiko.at",
+   "basis": "indirect: tied through lucumr.pocoo.org; the handles differ",
+   "name": "github:mitsuhiko <-> bluesky:mitsuhiko.at",
+   "same": true
+  },
+  {
+   "a": "github:ornicar",
+   "b": "lichess:thibault",
+   "basis": "the Lichess profile declares github.com/ornicar - and the handles share nothing at all, which makes this the hardest positive in the set",
+   "name": "github:ornicar <-> lichess:thibault",
+   "same": true
+  },
+  {
+   "a": "github:jcs",
+   "b": "lobsters:jcs",
+   "basis": "the GitHub profile is linked from the Lobsters account",
+   "name": "github:jcs <-> lobsters:jcs",
+   "same": true
+  },
+  {
+   "a": "github:jcs",
+   "b": "website:jcs.org",
+   "basis": "the GitHub profile publishes jcs.org as its website",
+   "name": "github:jcs <-> website:jcs.org",
+   "same": true
+  },
+  {
+   "a": "lobsters:jcs",
+   "b": "website:jcs.org",
+   "basis": "indirect: tied through github/jcs, which both declare",
+   "name": "lobsters:jcs <-> website:jcs.org",
+   "same": true
+  },
+  {
+   "a": "github:gwern",
+   "b": "website:gwern.net",
+   "basis": "the GitHub profile publishes gwern.net as its website",
+   "name": "github:gwern <-> website:gwern.net",
+   "same": true
+  },
+  {
+   "a": "github:tenderlove",
+   "b": "website:tenderlovemaking.com",
+   "basis": "the GitHub profile publishes tenderlovemaking.com as its website",
+   "name": "github:tenderlove <-> website:tenderlovemaking.com",
+   "same": true
+  },
+  {
+   "a": "github:ben",
+   "b": "devto:ben",
+   "basis": "hard: Ben Straub in Portland and Ben Halpern in New York, same handle, both software developers",
+   "name": "github:ben <-> devto:ben",
+   "same": false
+  },
+  {
+   "a": "github:thibault",
+   "b": "lichess:thibault",
+   "basis": "hard: Thibault J., a freelancer in Montpellier, and Thibault Duplessis, who founded Lichess - same handle, and one of them really is on Lichess",
+   "name": "github:thibault <-> lichess:thibault",
+   "same": false
+  },
+  {
+   "a": "github:hikaru",
+   "b": "chess:hikaru",
+   "basis": "hard: Hikaru Maeshiro in Japan and Hikaru Nakamura the chess grandmaster - same handle, and one of them really is a chess player",
+   "name": "github:hikaru <-> chess:hikaru",
+   "same": false
+  },
+  {
+   "a": "github:simon",
+   "b": "bluesky:simonwillison.net",
+   "basis": "hard: Simon Lelievre in Montreal and Simon Willison in Half Moon Bay",
+   "name": "github:simon <-> bluesky:simonwillison.net",
+   "same": false
+  },
+  {
+   "a": "github:simon",
+   "b": "website:simonwillison.net",
+   "basis": "hard: a different Simon, and a site that is not his",
+   "name": "github:simon <-> website:simonwillison.net",
+   "same": false
+  },
+  {
+   "a": "github:zach",
+   "b": "bluesky:zachleat.com",
+   "basis": "hard: Zach Baker in Austin and Zach Leatherman",
+   "name": "github:zach <-> bluesky:zachleat.com",
+   "same": false
+  },
+  {
+   "a": "github:zach",
+   "b": "website:zachleat.com",
+   "basis": "hard: a different Zach, and a site that is not his",
+   "name": "github:zach <-> website:zachleat.com",
+   "same": false
+  },
+  {
+   "a": "github:tim",
+   "b": "aboutme:tim",
+   "basis": "hard: the same handle on two platforms, and a GitHub account that publishes no name at all to argue with",
+   "name": "github:tim <-> aboutme:tim",
+   "same": false
+  },
+  {
+   "a": "instagram:wordpresscom",
+   "b": "instagram:beaulebens",
+   "basis": "hard: an Automattic employee and an Automattic brand, sharing employer and website",
+   "name": "instagram:wordpresscom <-> instagram:beaulebens",
+   "same": false
+  },
+  {
+   "a": "threads:wordpressdotcom",
+   "b": "github:beaulebens",
+   "basis": "hard: same shared employer and website, different parties",
+   "name": "threads:wordpressdotcom <-> github:beaulebens",
+   "same": false
+  },
+  {
+   "a": "instagram:github",
+   "b": "github:beaulebens",
+   "basis": "a company brand and an unrelated individual",
+   "name": "instagram:github <-> github:beaulebens",
+   "same": false
+  },
+  {
+   "a": "instagram:github",
+   "b": "threads:wordpressdotcom",
+   "basis": "two different company brands",
+   "name": "instagram:github <-> threads:wordpressdotcom",
+   "same": false
+  },
+  {
+   "a": "chess:hikaru",
+   "b": "lichess:thibault",
+   "basis": "hard: two chess players on two chess sites",
+   "name": "chess:hikaru <-> lichess:thibault",
+   "same": false
+  },
+  {
+   "a": "lobsters:jcs",
+   "b": "hackernews:pg",
+   "basis": "two different figures in the same community",
+   "name": "lobsters:jcs <-> hackernews:pg",
+   "same": false
+  },
+  {
+   "a": "github:torvalds",
+   "b": "hackernews:pg",
+   "basis": "two different figures in the same community",
+   "name": "github:torvalds <-> hackernews:pg",
+   "same": false
+  },
+  {
+   "a": "github:mitsuhiko",
+   "b": "website:zachleat.com",
+   "basis": "two well-known web developers, each with a personal site",
+   "name": "github:mitsuhiko <-> website:zachleat.com",
+   "same": false
+  },
+  {
+   "a": "github:sindresorhus",
+   "b": "website:tenderlovemaking.com",
+   "basis": "two open-source maintainers, unrelated",
+   "name": "github:sindresorhus <-> website:tenderlovemaking.com",
+   "same": false
+  },
+  {
+   "a": "website:gwern.net",
+   "b": "website:jcs.org",
+   "basis": "two personal sites belonging to different writers",
+   "name": "website:gwern.net <-> website:jcs.org",
+   "same": false
+  },
+  {
+   "a": "github:tenderlove",
+   "b": "website:lucumr.pocoo.org",
+   "basis": "two different maintainers, each with a blog",
+   "name": "github:tenderlove <-> website:lucumr.pocoo.org",
+   "same": false
+  },
+  {
+   "a": "lichess:thibault",
+   "b": "github:simonw",
+   "basis": "unrelated parties",
+   "name": "lichess:thibault <-> github:simonw",
+   "same": false
+  },
+  {
+   "a": "github:torvalds",
+   "b": "github:beaulebens",
+   "basis": "two different developers",
+   "name": "github:torvalds <-> github:beaulebens",
+   "same": false
+  },
+  {
+   "a": "github:torvalds",
+   "b": "instagram:beaulebens",
+   "basis": "two different developers",
+   "name": "github:torvalds <-> instagram:beaulebens",
+   "same": false
+  },
+  {
+   "a": "codeberg:gusted",
+   "b": "github:torvalds",
+   "basis": "two different developers",
+   "name": "codeberg:gusted <-> github:torvalds",
+   "same": false
+  },
+  {
+   "a": "devto:ben",
+   "b": "github:beaulebens",
+   "basis": "two different developers",
+   "name": "devto:ben <-> github:beaulebens",
+   "same": false
+  },
+  {
+   "a": "mixcloud:spartacus",
+   "b": "aboutme:tim",
+   "basis": "unrelated parties on unrelated platforms",
+   "name": "mixcloud:spartacus <-> aboutme:tim",
+   "same": false
+  },
+  {
+   "a": "aboutme:tim",
+   "b": "devto:ben",
+   "basis": "unrelated parties",
+   "name": "aboutme:tim <-> devto:ben",
+   "same": false
+  },
+  {
+   "a": "codeberg:gusted",
+   "b": "lobsters:jcs",
+   "basis": "two different developers",
+   "name": "codeberg:gusted <-> lobsters:jcs",
+   "same": false
+  },
+  {
+   "a": "chess:hikaru",
+   "b": "devto:ben",
+   "basis": "unrelated parties",
+   "name": "chess:hikaru <-> devto:ben",
+   "same": false
+  },
+  {
+   "a": "stackoverflow:SimonW",
+   "b": "github:ben",
+   "basis": "unrelated parties",
+   "name": "stackoverflow:SimonW <-> github:ben",
+   "same": false
+  },
+  {
+   "a": "devto:zachleat",
+   "b": "github:ben",
+   "basis": "unrelated parties",
+   "name": "devto:zachleat <-> github:ben",
+   "same": false
+  }
+ ]
+}
