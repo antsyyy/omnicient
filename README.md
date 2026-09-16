@@ -323,7 +323,7 @@ All are optional except `NEO4J_PASSWORD`; see `backend/.env.example`.
 | `OMNICIENT_REQUEST_DELAY`           | `1.0`                        | Minimum delay between requests to one host             |
 | `OMNICIENT_MAX_RESPONSE_BYTES`      | `2000000`                    | Response size limit                                    |
 | `OMNICIENT_MAX_REDIRECTS`           | `3`                          | Redirect hops, each re-validated                       |
-| `OMNICIENT_RESPECT_ROBOTS`          | `true`                       | Honour `robots.txt` where available                    |
+| `OMNICIENT_RESPECT_ROBOTS`          | `false`                      | Honour `robots.txt` where available. **Off by default** — set `true` to restore it |
 | `OMNICIENT_ALLOW_PRIVATE_NETWORKS`  | `false`                      | **Disables the SSRF guard.** Isolated test networks only |
 | `OMNICIENT_USER_AGENT`              | `Omnicient/0.1 …`            | Identifying User-Agent                                 |
 | `OMNICIENT_CORS_ORIGINS`            | `http://localhost:5173,…`    | Allowed browser origins                                |
@@ -886,7 +886,9 @@ answered first. Politeness is unaffected: the delay is held per host, so
 repeat requests to any single service are still spaced. Measured on a bare
 username against 23 live sources, this took a complete crawl from 93s to 23s. It follows only URLs discovered
 during the investigation, de-duplicates entities by `(type, platform,
-identifier)`, and honours `robots.txt` where it is available.
+identifier)`, and consults `robots.txt` when `OMNICIENT_RESPECT_ROBOTS` is
+set — see *Which sources work live* below for what that changes and what it
+does not.
 
 ### Which sources work live, and why
 
@@ -937,8 +939,10 @@ rather than as a flat list of two dozen platform names.
 | Pinterest, Flickr, Patreon, Linktree | ❌ | `Disallow:` — social |
 | LeetCode, Exercism, NameMC | ❌ | HTTP 403 to non-browser clients |
 
-**"robots off"** means the source is reachable only when the operator sets
-`OMNICIENT_RESPECT_ROBOTS=false`. Nothing else changes: Omnicient still sends
+**"robots off"** is the shipped default: `OMNICIENT_RESPECT_ROBOTS` is
+`false`, so the `Disallow` rules above are not consulted and these sources are
+reachable. Set it to `true` to honour them, which returns the tool to the
+narrower source list in the table further up. Nothing else changes either way: Omnicient still sends
 its own identifying user agent, keeps the per-host delay and the crawl budget,
 and does not impersonate a browser's TLS fingerprint, rotate user agents or
 proxies, or call private endpoints. robots.txt is an advisory protocol, so
