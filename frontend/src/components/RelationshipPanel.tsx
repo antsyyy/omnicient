@@ -99,7 +99,7 @@ export default function RelationshipPanel({
   const neutral = detail.evidence.filter((item) => item.stance === 'NEUTRAL')
 
   return (
-    <div className="flex h-full flex-col">
+    <div className="flex min-h-0 flex-1 flex-col">
       <header className="flex items-start justify-between gap-2 border-b border-line px-4 py-3">
         <div>
           <div className="panel-title">Relationship</div>

@@ -167,8 +167,21 @@ export default function EntityPanel({
 
   const isDemo = entity.metadata?.notice === 'DEMO DATA'
 
+  /*
+   * flex-1, not h-full. This panel is a flex child of the inspector section,
+   * which also holds the tab bar - so h-full meant "the height of the whole
+   * section", nav included, and the panel ran past the bottom by exactly the
+   * nav's height. overflow-hidden on the section then clipped whatever came
+   * last, which is the footer: on a 760px-tall window the Expand connections
+   * button was sliced in half, and at 1000px it survived by three pixels,
+   * which is why it looked fine here for so long.
+   *
+   * min-h-0 goes with it. A flex item's min-height defaults to auto, which
+   * refuses to shrink below the content - the scrolling body would push the
+   * footer straight back out of view without it.
+   */
   return (
-    <div className="flex h-full flex-col">
+    <div className="flex min-h-0 flex-1 flex-col">
       <header className="flex items-start justify-between gap-2 border-b border-line px-4 py-3">
         <div className="flex min-w-0 gap-3">
           <Avatar
