@@ -238,9 +238,16 @@ for inspecting an investigation graph directly in Cypher.
 cd backend
 python -m venv .venv
 source .venv/bin/activate          # Windows: .venv\Scripts\activate
-pip install -r requirements.txt
-cp .env.example .env               # then set NEO4J_PASSWORD
+pip install -r requirements-dev.txt   # runtime deps + pytest and ruff
+cp .env.example .env                 # then set NEO4J_PASSWORD
 ```
+
+`requirements.txt` holds the runtime dependencies alone, pinned exactly, and
+is what the Docker image installs; `requirements-dev.txt` pulls those in and
+adds the test tooling. The pins are deliberate — the constraints used to be
+`>=`, so an image rebuilt a month later resolved whatever was newest that day
+and could have taken a major version without a line of this project changing.
+To move a pin: bump it, run the suite, commit the new version with the result.
 
 `NEO4J_PASSWORD` is the only value without a working default — no password is
 hardcoded anywhere in the repository.
@@ -1105,7 +1112,8 @@ omnicient/
 │   │                           correlation, alias_detection,
 │   │                           identity_profile, paths, leads, graph,
 │   │                           sources, api
-│   ├── requirements.txt
+│   ├── requirements.txt        # runtime, pinned — what Docker installs
+│   ├── requirements-dev.txt    # the above plus pytest and ruff
 │   └── .env.example
 ├── frontend/
 │   ├── src/
