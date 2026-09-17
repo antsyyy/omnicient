@@ -112,7 +112,7 @@ export default function Dashboard() {
 
       <section className="rounded border border-line bg-panel p-4">
         <h2 className="panel-title mb-3">New investigation</h2>
-        <SearchBar health={health} busy={busy} onStart={start} />
+        <SearchBar busy={busy} onStart={start} />
         {error && <p className="mt-3 text-[12px] text-rejected">{error}</p>}
       </section>
 
