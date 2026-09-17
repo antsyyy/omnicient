@@ -21,11 +21,16 @@ interface Props {
 export default function SearchBar({ health, busy, onStart }: Props) {
   const [identifier, setIdentifier] = useState('')
   const [name, setName] = useState('')
-  const [demo, setDemo] = useState(true)
+  /*
+   * Null until the analyst actually chooses, so the box follows whatever the
+   * server is configured for. It used to start checked unconditionally, which
+   * meant a server running live still returned synthetic data for every
+   * investigation started from here unless somebody noticed and unticked it.
+   */
+  const [demo, setDemo] = useState<boolean | null>(null)
   const [touched, setTouched] = useState(false)
 
-  const demoSeed = health?.demo_seed
-  const effectiveDemo = health ? demo : true
+  const effectiveDemo = demo ?? health?.demo_mode ?? true
 
   function submit(event: React.FormEvent) {
     event.preventDefault()
@@ -36,18 +41,6 @@ export default function SearchBar({ health, busy, onStart }: Props) {
       identifier: value,
       demo: effectiveDemo,
       name: name.trim() || undefined,
-    })
-  }
-
-  /** Section 30: one click to a fully populated, offline investigation. */
-  function launchDemo() {
-    const seed = demoSeed?.identifier ?? 'alice_98'
-    setIdentifier(`@${seed}`)
-    setDemo(true)
-    onStart({
-      identifier: seed,
-      demo: true,
-      name: `DEMO investigation · @${seed}`,
     })
   }
 
@@ -92,15 +85,6 @@ export default function SearchBar({ health, busy, onStart }: Props) {
       </p>
 
       <div className="flex flex-wrap items-center gap-4">
-        <button
-          type="button"
-          onClick={launchDemo}
-          disabled={busy}
-          className="rounded border border-demo/50 bg-demo/10 px-3 py-1.5 font-mono text-[12px] tracking-wide text-demo hover:bg-demo/20 disabled:opacity-50"
-        >
-          ▶ Launch demo investigation
-        </button>
-
         <label className="flex items-center gap-2 text-[12px] text-dim">
           <input
             type="checkbox"

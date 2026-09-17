@@ -95,21 +95,7 @@ export default function Dashboard() {
         </div>
         <div className="text-right font-mono text-[11px] text-faint">
           <div>v{health?.version ?? '—'}</div>
-          <div>
-            mode:{' '}
-            <span className={health?.demo_mode ? 'text-demo' : 'text-band-medium'}>
-              {health ? (health.demo_mode ? 'DEMO' : 'LIVE') : '—'}
-            </span>
-          </div>
           <div>sources: {health?.sources.join(', ') ?? '—'}</div>
-          {health && !health.crawler.respect_robots && (
-            <div
-              className="text-band-medium"
-              title="robots.txt is not consulted. Instagram, Facebook and Threads publish Disallow: / — reaching them is an operator decision, and their terms of service apply independently."
-            >
-              robots: <span className="text-rejected">ignored</span>
-            </div>
-          )}
         </div>
       </header>
 
