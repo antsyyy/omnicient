@@ -78,9 +78,29 @@ function ResultRow({
   const found = result.outcome === 'FOUND'
   const confidence = result.confidence
 
+  /*
+   * The whole row is the click target, not just the handle.
+   *
+   * Not a <button> wrapping everything: the row already contains buttons and
+   * a link, and nesting interactive elements inside a button is invalid and
+   * breaks keyboard behaviour. So the click lives on the <li> and every inner
+   * control stops the event before it bubbles - otherwise "reject" would also
+   * open the entity it just rejected.
+   *
+   * The handle stays a real <button> so the row is still reachable and
+   * operable from the keyboard; the row click is a convenience on top of it,
+   * not a replacement for it.
+   */
+  const openEntity = result.entity
+    ? () => onSelectEntity(result.entity!.id)
+    : undefined
+
   return (
     <li
-      className="border-b border-line px-4 py-3 last:border-b-0"
+      onClick={openEntity}
+      className={`border-b border-line px-4 py-3 last:border-b-0 ${
+        openEntity ? 'cursor-pointer hover:bg-raised/60' : ''
+      }`}
       style={selected ? { background: 'var(--color-raised)' } : undefined}
     >
       <div className="flex items-center gap-2">
@@ -121,7 +141,10 @@ function ResultRow({
 
         {result.identifier && (
           <button
-            onClick={() => result.entity && onSelectEntity(result.entity.id)}
+            onClick={(event) => {
+              event.stopPropagation()
+              result.entity && onSelectEntity(result.entity.id)
+            }}
             disabled={!result.entity}
             className="min-w-0 truncate font-mono text-[13px] text-accent hover:underline disabled:cursor-default disabled:no-underline"
             title={result.display_name ?? result.identifier}
@@ -185,7 +208,10 @@ function ResultRow({
       {result.actionable && (
         <div className="mt-2 flex flex-wrap items-center gap-1.5 pl-7">
           <button
-            onClick={() => onSelectRelationship(result.relationship_id!)}
+            onClick={(event) => {
+              event.stopPropagation()
+              onSelectRelationship(result.relationship_id!)
+            }}
             className="rounded border border-line px-1.5 py-0.5 font-mono text-[11px] text-dim hover:border-accent hover:text-accent"
           >
             view evidence
@@ -194,7 +220,10 @@ function ResultRow({
             <>
               <button
                 disabled={busy}
-                onClick={() => onVerdict(result.relationship_id!, 'confirm')}
+                onClick={(event) => {
+                  event.stopPropagation()
+                  onVerdict(result.relationship_id!, 'confirm')
+                }}
                 className="rounded border border-line px-1.5 py-0.5 font-mono text-[11px] text-dim hover:border-confirmed hover:text-confirmed disabled:opacity-40"
                 title="Record that you judge this association to hold"
               >
@@ -202,7 +231,10 @@ function ResultRow({
               </button>
               <button
                 disabled={busy}
-                onClick={() => onVerdict(result.relationship_id!, 'reject')}
+                onClick={(event) => {
+                  event.stopPropagation()
+                  onVerdict(result.relationship_id!, 'reject')
+                }}
                 className="rounded border border-line px-1.5 py-0.5 font-mono text-[11px] text-dim hover:border-rejected hover:text-rejected disabled:opacity-40"
                 title="Record that you judge this association not to hold"
               >
@@ -212,7 +244,10 @@ function ResultRow({
           ) : (
             <button
               disabled={busy}
-              onClick={() => onVerdict(result.relationship_id!, 'reset')}
+              onClick={(event) => {
+                event.stopPropagation()
+                onVerdict(result.relationship_id!, 'reset')
+              }}
               className="rounded border border-line px-1.5 py-0.5 font-mono text-[11px] text-faint hover:border-line-bright hover:text-dim disabled:opacity-40"
             >
               clear verdict
@@ -221,6 +256,7 @@ function ResultRow({
           {result.url && (
             <a
               href={result.url}
+              onClick={(event) => event.stopPropagation()}
               target="_blank"
               rel="noreferrer noopener"
               className="font-mono text-[11px] text-faint hover:text-accent"
