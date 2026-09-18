@@ -49,6 +49,7 @@ from .music import LastFmAdapter, MixcloudAdapter, SoundCloudAdapter
 from .reddit import RedditAdapter
 from .social import MediumAdapter, TelegramAdapter
 from .threads import ThreadsAdapter
+from .video import YouTubeAdapter
 from .website import WebsiteAdapter
 
 logger = get_logger(__name__)
@@ -84,6 +85,7 @@ ADAPTER_CLASSES: tuple[type[SourceAdapter], ...] = (
     BlueskyAdapter,
     TelegramAdapter,
     MediumAdapter,
+    YouTubeAdapter,
     MicroBlogAdapter,
     # Gaming.
     SteamAdapter,
@@ -169,6 +171,7 @@ __all__ = [
     "LastFmAdapter",
     "LaunchpadAdapter",
     "MediumAdapter",
+    "YouTubeAdapter",
     "ScratchAdapter",
     "SoundCloudAdapter",
     "SourceCategory",

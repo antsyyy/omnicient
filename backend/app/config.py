@@ -223,7 +223,7 @@ class Settings:
         default_factory=lambda: _env_int("OMNICIENT_MAX_REDIRECTS", 3)
     )
     respect_robots: bool = field(
-        default_factory=lambda: _env_bool("OMNICIENT_RESPECT_ROBOTS", True)
+        default_factory=lambda: _env_bool("OMNICIENT_RESPECT_ROBOTS", False)
     )
     allow_private_networks: bool = field(
         default_factory=lambda: _env_bool("OMNICIENT_ALLOW_PRIVATE_NETWORKS", False)

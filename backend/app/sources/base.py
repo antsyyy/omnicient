@@ -291,13 +291,25 @@ class SafeFetcher:
     # -- request pipeline --------------------------------------------------
 
     async def get(
-        self, url: str, headers: dict[str, str] | None = None
+        self,
+        url: str,
+        headers: dict[str, str] | None = None,
+        head_bytes: int | None = None,
     ) -> FetchResult:
         """Fetch a public URL, following validated redirects.
 
         ``headers`` overrides the client defaults for this request only - a
         JSON source has to ask for JSON, or an API answers 415 rather than
         serving the document.
+
+        ``head_bytes`` stops reading once that many bytes have arrived and
+        parses what came back, instead of refusing the page for being too
+        large. For a source whose metadata sits in the document head this is
+        both sufficient and kinder to the platform: a YouTube channel page is
+        1.4-2.8MB of embedded player state wrapped around an Open Graph card,
+        and pulling all of it to read four meta tags wastes their bandwidth as
+        much as ours. Sources that need the whole document leave it unset and
+        keep the hard limit.
 
         Raises :class:`SourceError` for every failure mode so callers handle
         one exception type: SSRF rejection, robots restriction, rate limiting,
@@ -373,7 +385,7 @@ class SafeFetcher:
 
             try:
                 self._raise_for_status(response, validated.url)
-                text = await self._read_limited(response)
+                text = await self._read_limited(response, head_bytes)
             finally:
                 await response.aclose()
 
@@ -562,11 +574,27 @@ class SafeFetcher:
             chunks.append(chunk)
         return b"".join(chunks)
 
-    async def _read_limited(self, response: httpx.Response) -> str:
-        """Read at most ``max_response_bytes`` of the body."""
+    async def _read_limited(
+        self, response: httpx.Response, head_bytes: int | None = None
+    ) -> str:
+        """Read the body, bounded.
+
+        Two different bounds, and the difference matters. ``max_response_bytes``
+        is a refusal: a page over it is not read at all, because a caller
+        asking for a document wants the document. ``head_bytes`` is a
+        deliberate truncation by a caller that only needs the top of the page,
+        so an oversized body is a partial read rather than an error - and the
+        connection closes as soon as enough has arrived.
+        """
         limit = self.settings.max_response_bytes
+        stop = min(head_bytes, limit) if head_bytes else limit
         declared = response.headers.get("content-length")
-        if declared and declared.isdigit() and int(declared) > limit:
+        if (
+            head_bytes is None
+            and declared
+            and declared.isdigit()
+            and int(declared) > limit
+        ):
             raise SourceError(
                 FailureReason.TOO_LARGE,
                 f"content-length {declared} exceeds {limit} bytes",
@@ -576,14 +604,23 @@ class SafeFetcher:
         total = 0
         async for chunk in response.aiter_bytes():
             total += len(chunk)
-            if total > limit:
+            # A body of exactly the limit is still fine; only one byte past it
+            # is not. Kept as a strict `>` so the refusal threshold is
+            # unchanged from before head_bytes existed.
+            if head_bytes is None and total > limit:
                 raise SourceError(
                     FailureReason.TOO_LARGE,
                     f"response exceeded {limit} bytes",
                     str(response.url),
                 )
             chunks.append(chunk)
-        return b"".join(chunks).decode(response.encoding or "utf-8", errors="replace")
+            if head_bytes is not None and total >= stop:
+                await response.aclose()
+                break
+        body = b"".join(chunks)
+        return (body[:stop] if head_bytes is not None else body).decode(
+            response.encoding or "utf-8", errors="replace"
+        )
 
     async def _lock_for(self, host: str) -> asyncio.Lock:
         """The politeness lock for one host, created on first use."""
@@ -898,6 +935,20 @@ class OpenGraphProfileAdapter(SourceAdapter):
     )
     #: When true, a login wall is reported as PRIVATE rather than NOT_FOUND.
     report_login_wall: bool = True
+    #: Read only this many bytes, for platforms that wrap a small Open Graph
+    #: card in a very large document. Left as None the whole page is read and
+    #: the usual size limit applies.
+    head_bytes: int | None = None
+    #: Set when the platform canonicalises a handle to an opaque internal id,
+    #: so the advertised canonical URL cannot be compared against what was
+    #: asked for. YouTube does this: /@veritasium reports its canonical as
+    #: /channel/UCHnyfMqiRRG1u-2MsSQLbXA, and the two share no characters.
+    #:
+    #: Only safe for a platform that answers a missing handle with 404. The
+    #: canonical comparison exists for sites that return 200 and a generic
+    #: page for anything, and turning it off for one of those would let every
+    #: interstitial through as a profile.
+    canonical_is_opaque: bool = False
 
     def __init__(self, fetcher: SafeFetcher | None = None) -> None:
         self.fetcher = fetcher or SafeFetcher()
@@ -918,7 +969,7 @@ class OpenGraphProfileAdapter(SourceAdapter):
 
         url = self.profile_url(identifier)
         try:
-            fetched = await self.fetcher.get(url)
+            fetched = await self.fetcher.get(url, head_bytes=self.head_bytes)
         except SourceError as exc:
             logger.info(
                 "source_unavailable platform=%s identifier=%s reason=%s",
@@ -964,7 +1015,9 @@ class OpenGraphProfileAdapter(SourceAdapter):
         title = meta.get("og:title")
         if not title:
             return None
-        if not page_is_profile_for(meta, identifier, self.platform):
+        if not self.canonical_is_opaque and not page_is_profile_for(
+            meta, identifier, self.platform
+        ):
             return None
 
         display_name = self.extract_display_name(title)

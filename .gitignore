@@ -26,6 +26,11 @@ backend/data/
 *.db
 *.sqlite3
 
+# Project documentation kept out of version control on purpose. SCOPE.md and
+# ARCHITECTURE.md are written for the capstone submission rather than for the
+# repository, so they live here locally and are not tracked.
+docs/
+
 # Editors / OS
 .DS_Store
 .idea/

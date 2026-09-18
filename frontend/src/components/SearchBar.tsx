@@ -1,8 +1,7 @@
 import { useState } from 'react'
-import type { Health, NewInvestigationInput } from '../types'
+import type { NewInvestigationInput } from '../types'
 
 interface Props {
-  health: Health | null
   busy: boolean
   onStart: (input: NewInvestigationInput) => void
 }
@@ -15,17 +14,15 @@ interface Props {
  * and which sources to ask.  Offering a platform dropdown here would push a
  * decision onto the analyst that the tool is meant to make for them.
  *
- * Demo mode is the default the server reports; switching it off is an explicit
- * act, because it means querying live public sources.
+ * Whether an investigation runs against live sources or the offline demo
+ * dataset is a deployment setting (OMNICIENT_DEMO_MODE), not a per-search
+ * choice, so there is no control for it here. The request omits the flag and
+ * the server applies its own.
  */
-export default function SearchBar({ health, busy, onStart }: Props) {
+export default function SearchBar({ busy, onStart }: Props) {
   const [identifier, setIdentifier] = useState('')
   const [name, setName] = useState('')
-  const [demo, setDemo] = useState(true)
   const [touched, setTouched] = useState(false)
-
-  const demoSeed = health?.demo_seed
-  const effectiveDemo = health ? demo : true
 
   function submit(event: React.FormEvent) {
     event.preventDefault()
@@ -34,20 +31,7 @@ export default function SearchBar({ health, busy, onStart }: Props) {
     if (!value) return
     onStart({
       identifier: value,
-      demo: effectiveDemo,
       name: name.trim() || undefined,
-    })
-  }
-
-  /** Section 30: one click to a fully populated, offline investigation. */
-  function launchDemo() {
-    const seed = demoSeed?.identifier ?? 'alice_98'
-    setIdentifier(`@${seed}`)
-    setDemo(true)
-    onStart({
-      identifier: seed,
-      demo: true,
-      name: `DEMO investigation · @${seed}`,
     })
   }
 
@@ -90,34 +74,6 @@ export default function SearchBar({ health, busy, onStart }: Props) {
         address, a link or a domain — and asks every source that can answer for
         it.
       </p>
-
-      <div className="flex flex-wrap items-center gap-4">
-        <button
-          type="button"
-          onClick={launchDemo}
-          disabled={busy}
-          className="rounded border border-demo/50 bg-demo/10 px-3 py-1.5 font-mono text-[12px] tracking-wide text-demo hover:bg-demo/20 disabled:opacity-50"
-        >
-          ▶ Launch demo investigation
-        </button>
-
-        <label className="flex items-center gap-2 text-[12px] text-dim">
-          <input
-            type="checkbox"
-            checked={effectiveDemo}
-            onChange={(event) => setDemo(event.target.checked)}
-            className="h-3 w-3 accent-[var(--color-accent)]"
-          />
-          Demo mode (offline synthetic dataset)
-        </label>
-
-        {!effectiveDemo && (
-          <span className="text-[11px] text-band-medium">
-            Live mode queries public pages only. Platforms that require a login
-            will be reported as unavailable.
-          </span>
-        )}
-      </div>
 
       {touched && !identifier.trim() && (
         <p className="text-[12px] text-rejected">

@@ -82,7 +82,7 @@ services:
       NEO4J_DATABASE: "neo4j"
       # Demo mode uses the built-in synthetic dataset. Set to false to query
       # live public sources.
-      OMNICIENT_DEMO_MODE: "true"
+      OMNICIENT_DEMO_MODE: "false"
       OMNICIENT_MAX_DEPTH: "2"
       OMNICIENT_MAX_PAGES: "150"
       OMNICIENT_REQUEST_DELAY: "1.0"

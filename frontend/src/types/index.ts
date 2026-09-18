@@ -339,8 +339,14 @@ export interface GlobalStats {
 /** What the analyst typed, plus the options on the creation form. */
 export interface NewInvestigationInput {
   identifier: string
-  demo: boolean
   name?: string
+  /**
+   * Force demo mode on or off. Omitted by the interface, which has no control
+   * for it - the server's OMNICIENT_DEMO_MODE decides, and the backend
+   * already treats a missing value as "use your own setting". Kept on the
+   * type because the API still accepts it.
+   */
+  demo?: boolean
 }
 
 /** Client-side graph filter state. */
